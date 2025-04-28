@@ -638,6 +638,210 @@ const aadhaarPanLink = async (req, res) => {
   }
 }
 
+const generateAadhaarOTP = async (req, res) => {
+  try {
+    // Get userId from request (assuming it comes from auth middleware)
+    const userId = req.userId;
+    
+    // Check if user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Check if Aadhaar is already verified in primary verification
+    if (!user.isAadhaarVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please complete Aadhaar OCR verification first'
+      });
+    }
+    
+    // Check if already validated
+    if (user.isAadhaarValidated) {
+      return res.status(200).json({
+        success: true,
+        message: 'Aadhaar is already validated',
+        data: {
+          isAadhaarValidated: true
+        }
+      });
+    }
+    
+    // Get user KYC data
+    const userKYC = await UserKYC.findOne({ userId });
+    
+    if (!userKYC) {
+      return res.status(400).json({
+        success: false,
+        message: 'KYC records not found. Please complete KYC process first.'
+      });
+    }
+    
+    // Check if Aadhaar number is present
+    if (!userKYC.aadhaarNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Aadhaar number is missing in KYC records. Please verify your Aadhaar again.'
+      });
+    }
+    
+    // Call Surepass API to generate OTP
+    const otpRequestData = {
+      id_number: userKYC.aadhaarNumber
+    };
+    
+    const otpResult = await postJSON('/api/v1/aadhaar-v2/generate-otp', otpRequestData);
+    
+    // Debug: Log the OTP generation result
+    console.log("Aadhaar OTP Generation Result:", JSON.stringify(otpResult, null, 2));
+    
+    if (otpResult && otpResult.success) {
+      // Store the client_id temporarily in the KYC record for use when submitting OTP
+      userKYC.aadhaarClientId = otpResult.data.client_id;
+      await userKYC.save();
+      
+      return res.status(200).json({
+        success: true,
+        message: 'OTP sent to registered mobile number',
+        data: {
+          client_id: otpResult.data.client_id
+        }
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to generate OTP',
+        error: otpResult?.error || 'OTP generation failed'
+      });
+    }
+    
+  } catch (error) {
+    console.error('Error in generating Aadhaar OTP:', error);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+}
+
+const verifyAadhaarOTP =  async (req, res) => {
+    try {
+      // Get userId from request (assuming it comes from auth middleware)
+      const userId = req.userId;
+      
+      // Check if user exists
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+      
+      // Check if Aadhaar is verified
+      if (!user.isAadhaarVerified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Aadhaar is not verified yet. Please verify your Aadhaar first.'
+        });
+      }
+      
+      // Check if PAN is verified
+      if (!user.isPanVerified) {
+        return res.status(400).json({
+          success: false,
+          message: 'PAN is not verified yet. Please verify your PAN first.'
+        });
+      }
+      
+      // Get user KYC data
+      const userKYC = await UserKYC.findOne({ userId });
+      
+      if (!userKYC) {
+        return res.status(400).json({
+          success: false,
+          message: 'KYC records not found. Please complete KYC process first.'
+        });
+      }
+      
+      // Check if Aadhaar number is present
+      if (!userKYC.aadhaarNumber) {
+        return res.status(400).json({
+          success: false,
+          message: 'Aadhaar number is missing in KYC records. Please verify your Aadhaar again.'
+        });
+      }
+      
+      // Check if PAN number is present
+      if (!userKYC.panNumber) {
+        return res.status(400).json({
+          success: false,
+          message: 'PAN number is missing in KYC records. Please verify your PAN again.'
+        });
+      }
+      
+      // Call Surepass API to check if Aadhaar and PAN are linked
+      const verificationData = {
+        id_number: userKYC.panNumber,
+        aadhaar_number: userKYC.aadhaarNumber,
+        consent: "Y",
+        consent_text: "I hereby authorize to check if my Aadhaar and PAN are linked"
+      };
+      
+      const linkResult = await postJSON('/api/v1/pan/aadhaar-pan-link-check', verificationData);
+      
+      // Debug: Log the link verification result
+      console.log("Aadhaar-PAN Link Result:", JSON.stringify(linkResult, null, 2));
+      
+      if (linkResult && linkResult.success) {
+        const isLinked = linkResult.data && linkResult.data.linked === true;
+        
+        if (isLinked) {
+          // Update user record to indicate Aadhaar and PAN are linked
+          user.isPanAadhaarLinked = true;
+          await user.save();
+          
+          return res.status(200).json({
+            success: true,
+            message: 'Aadhaar and PAN are linked successfully',
+            data: {
+              isPanAadhaarLinked: true
+            }
+          });
+        } else {
+          return res.status(400).json({
+            success: false,
+            message: 'Aadhaar and PAN are not linked to each other',
+            data: {
+              isPanAadhaarLinked: false
+            }
+          });
+        }
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Failed to verify Aadhaar-PAN link',
+          error: linkResult?.error || 'Verification failed'
+        });
+      }
+      
+    } catch (error) {
+      console.error('Error in verifying Aadhaar-PAN link:', error);
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Internal server error',
+        error: error.message
+      });
+    }
+  }
+
 
 module.exports = {
   registerWithOtp,
@@ -646,5 +850,7 @@ module.exports = {
   updateProfileAndProduct,
   aadhaarOCR,
   panOCR,
-  aadhaarPanLink
+  aadhaarPanLink,
+  generateAadhaarOTP,
+  verifyAadhaarOTP
 };

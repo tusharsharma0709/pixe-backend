@@ -21,6 +21,10 @@ router.post('/aadhaar-ocr',upload.fields([
 router.post('/pan-ocr', upload.single('panDocument'),userAuth, userController.panOCR);
 // Defines the route to check if Aadhaar linked to Pan
 router.get('/verify-link',userAuth, userController.aadhaarPanLink);
+// Defines the route to validate aadhaar (generate OTP)
+router.post('/aadhaar-generate-otp',userAuth, userController.generateAadhaarOTP);
+// Defines the route to validate aadhaar (submit OTP)
+router.post('/aadhaar-verify-otp',userAuth, userController.verifyAadhaarOTP);
 
 
 module.exports = router;

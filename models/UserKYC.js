@@ -16,6 +16,14 @@ const userKYCSchema = new mongoose.Schema({
     aadhaarNumber: {
         type: Number
     },
+    aadhaarClientId: {
+        type: String,
+        default: null
+    },
+    aadhaarValidationData: {
+        type: String,
+        default: null
+    },
     panData: { 
         type: String, 
         default: null 
