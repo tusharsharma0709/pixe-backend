@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 
-const adminSchema =new mongoose.Schema({
+const superAdminSchema =new mongoose.Schema({
     first_name: {
         type: String,
         required: true
@@ -22,19 +22,6 @@ const adminSchema =new mongoose.Schema({
     password: {
         type: String,
         required: true
-    },
-    fb_id: {
-        type: String,
-        default:'null'
-    },
-    fb_password: {
-        type: String,
-        default:'null'
-    },
-    status: {
-        type: Boolean,
-        default: true,
-        required: true
     }
 },
 {
@@ -42,5 +29,5 @@ const adminSchema =new mongoose.Schema({
 }
 );
 
-const Admin = mongoose.model("Admins", adminSchema);
-module.exports = {Admin};
+const SuperAdmin = mongoose.model("SuperAdmins", superAdminSchema);
+module.exports = {SuperAdmin};

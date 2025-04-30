@@ -9,6 +9,8 @@ app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cors())
 
+const superAdminRoutes = require('./routes/superAdminRoutes'); //super admin routes
+app.use('/superadmin', superAdminRoutes);
 const adminRoutes = require('./routes/adminRoutes'); //admin routes
 app.use('/admin', adminRoutes);
 const userRoutes = require('./routes/userRoutes'); //user routes

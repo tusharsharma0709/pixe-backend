@@ -1,11 +1,11 @@
 const express = require('express');
 const admin = require('../controllers/adminControllers');
-const {adminAuth} = require('../middlewares/auth')
+const {adminAuth, superAdminAuth} = require('../middlewares/auth')
 
 const router = express.Router();
 
 // Defines the route for register admin
-router.post('/register',admin.register);
+router.post('/register',superAdminAuth,admin.register);
 // Defines the route for login admin panel
 router.post('/login', admin.login);
 // Defines the route for logout from admin panel

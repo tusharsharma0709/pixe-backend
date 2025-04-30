@@ -166,7 +166,9 @@ const updateProfile = async (req, res) => {
         $set:{
             first_name: req.body.first_name,
             last_name: req.body.last_name,
-            mobile: req.body.mobile
+            mobile: req.body.mobile,
+            fb_id: req.body.fb_id,
+            fb_password: req.body.fb_password
         }
     })
     .then(result=>{

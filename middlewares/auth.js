@@ -1,7 +1,50 @@
 const jwt = require("jsonwebtoken");
 const { AdminTokens } = require("../models/adminTokens");
 const { UserToken } = require("../models/userTokens");
+const { SuperAdminTokens } = require("../models/SuperAdminTokens");
 const JWT_SECRET = process.env.JWT_SECRET;
+
+const superAdminAuth = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    // Check for token in header
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ success: false, message: "Authorization token missing" });
+    }
+
+    const token = authHeader.split(" ")[1];
+
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET); // Use process.env.JWT_SECRET instead of JWT_SECRET
+    
+    // Check for superAdminId in decoded token (not adminId)
+    if (!decoded || !decoded.superAdminId) { // Changed from adminId to superAdminId
+      return res.status(401).json({ success: false, message: "Invalid token" });
+    }
+
+    // Check token exists in DB
+    const tokenExists = await SuperAdminTokens.findOne({
+      superAdminId: decoded.superAdminId,
+      token,
+      tokenType: "login",
+    });
+
+    if (!tokenExists) {
+      return res.status(401).json({ success: false, message: "Token expired or invalid" });
+    }
+
+    // Attach superAdminId to req
+    req.superAdminId = decoded.superAdminId;
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      success: false,
+      message: "Authentication failed",
+      error: error.message,
+    });
+  }
+};
 
 const adminAuth = async (req, res, next) => {
   try {
@@ -31,7 +74,7 @@ const adminAuth = async (req, res, next) => {
       return res.status(401).json({ success: false, message: "Token expired or invalid" });
     }
 
-    // Attach superAdminId to req
+    // Attach adminId to req
     req.adminId = decoded.adminId;
     next();
   } catch (error) {
@@ -77,6 +120,7 @@ const userAuth = async (req, res, next) => {
 };
 
 module.exports = {
+    superAdminAuth,
     adminAuth,
     userAuth
 }

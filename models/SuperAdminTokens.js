@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
-const adminTokenSchema = new mongoose.Schema({
-    adminId: { 
+const superAdminTokenSchema = new mongoose.Schema({
+    superAdminId: { 
         type: mongoose.Schema.Types.ObjectId, 
-        ref: "Admins", 
+        ref: "SuperAdmins", 
         required: true 
     },
     token: { 
@@ -21,5 +21,5 @@ const adminTokenSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-const AdminTokens = mongoose.model("adminTokens", adminTokenSchema);
-module.exports = { AdminTokens };
+const SuperAdminTokens = mongoose.model("superAdminTokens", superAdminTokenSchema);
+module.exports = { SuperAdminTokens };
