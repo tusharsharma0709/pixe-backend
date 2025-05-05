@@ -1,30 +1,45 @@
-const express = require('express');
-const router = express.Router();
-const userController = require('../controllers/userControllers');
-const { userAuth } = require('../middlewares/auth');
-const upload = require('../middlewares/multer');
-
-// Defines the route for register and send otp
-router.post('/register', userController.registerWithOtp);
-// Defines the route for login and send otp
-router.post('/login', userController.loginWithOtp);
-// Defines the route to verify otp
-router.post('/verify', userController.verifyOtp);
-// Defines the route to update profile and select product
-router.patch('/update',userAuth, userController.updateProfileAndProduct);
-// Defines the route for Aadhaar OCR
-router.post('/aadhaar-ocr',upload.fields([
-    { name: 'aadhaarFront', maxCount: 1 },
-    { name: 'aadhaarBack', maxCount: 1 }
-  ]),userAuth, userController.aadhaarOCR);
-// Defines the route for Pan OCR
-router.post('/pan-ocr', upload.single('panDocument'),userAuth, userController.panOCR);
-// Defines the route to check if Aadhaar linked to Pan
-router.get('/verify-link',userAuth, userController.aadhaarPanLink);
-// Defines the route to validate aadhaar (generate OTP)
-router.post('/aadhaar-generate-otp',userAuth, userController.generateAadhaarOTP);
-// Defines the route to validate aadhaar (submit OTP)
-router.post('/aadhaar-verify-otp',userAuth, userController.verifyAadhaarOTP);
-
-
-module.exports = router;
+  // 3. ROUTES
+  // routes/userRoutes.js
+  const express = require('express');
+  const router = express.Router();
+  const userController = require('../controllers/userControllers');
+  const { userAuth } = require('../middlewares/auth');
+  const upload = require('../middlewares/multer');
+  
+  // Authentication routes
+  router.post('/register', userController.registerWithOtp);
+  router.post('/login', userController.loginWithOtp);
+  router.post('/verify-otp', userController.verifyOtp);
+  
+  // Profile management
+  router.get('/profile', userAuth, userController.getUserProfile);
+  router.patch('/update-profile', userAuth, userController.updateProfileAndProduct);
+  router.get('/workflow-status', userAuth, userController.getUserWorkflowStatus);
+  
+  // KYC verification routes
+  router.post('/aadhaar-ocr', 
+    userAuth, 
+    upload.fields([
+      { name: 'aadhaarFront', maxCount: 1 },
+      { name: 'aadhaarBack', maxCount: 1 }
+    ]), 
+    userController.aadhaarOCR
+  );
+  
+  router.post('/pan-ocr', 
+    userAuth, 
+    upload.single('panDocument'), 
+    userController.panOCR
+  );
+  
+  router.get('/verify-aadhaar-pan-link', userAuth, userController.aadhaarPanLink);
+  
+  // Aadhaar OTP verification
+  router.post('/aadhaar-generate-otp', userAuth, userController.generateAadhaarOTP);
+  router.post('/aadhaar-verify-otp', userAuth, userController.verifyAadhaarOTP);
+  
+  // Banking verification
+  router.post('/bank-account', userAuth, userController.updateBankAccount);
+  router.post('/verify-bank-account', userAuth, userController.verifyBankAccount);
+  
+  module.exports = router;

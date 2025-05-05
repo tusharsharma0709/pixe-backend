@@ -1,28 +1,38 @@
+// 3. ROUTES
+// routes/adminRoutes.js
 const express = require('express');
-const admin = require('../controllers/adminControllers');
-const {adminAuth, superAdminAuth} = require('../middlewares/auth')
-
 const router = express.Router();
+const admin = require('../controllers/adminControllers');
+const { adminAuth } = require('../middlewares/auth');
 
-// Defines the route for register admin
-router.post('/register',superAdminAuth,admin.register);
-// Defines the route for login admin panel
+// Auth routes
+router.post('/register', admin.register); // SuperAdmin creates admin
 router.post('/login', admin.login);
-// Defines the route for logout from admin panel
-router.post('/logout' , adminAuth , admin.logout);
-// Defines the route for get profile of a particular admin
-router.get('/profile' , adminAuth , admin.Profile);
-// Defines the route for update profile of an admin
-router.patch('/update-profile' , adminAuth , admin.updateProfile);
-// Defines the route for change the password of an admin
-router.post('/change-password', adminAuth , admin.changePassword);
-// Defines the route to get all users
-router.get('/users', adminAuth , admin.getAllUsers);
-// Defines the route to get particular users
-router.get('/user/:id', adminAuth , admin.getUserById);
-// Defines the route to update user status
-router.patch('/user-status/:id', adminAuth , admin.updateUserStatus);
+router.post('/logout', adminAuth, admin.logout);
 
+// Profile management
+router.get('/profile', adminAuth, admin.Profile);
+router.patch('/update-profile', adminAuth, admin.updateProfile);
+router.post('/change-password', adminAuth, admin.changePassword);
 
+// Facebook credentials
+router.post('/facebook-credentials', adminAuth, admin.updateFacebookCredentials);
+router.get('/facebook-status', adminAuth, admin.getFacebookStatus);
 
-module.exports = router
+// Campaign management
+router.get('/campaigns', adminAuth, admin.getAdminCampaigns);
+
+// Workflow management
+router.post('/workflows', adminAuth, admin.createWorkflow);
+router.get('/workflows', adminAuth, admin.getAllWorkflows);
+router.get('/workflows/:id', adminAuth, admin.getWorkflowById);
+router.put('/workflows/:id', adminAuth, admin.updateWorkflow);
+router.delete('/workflows/:id', adminAuth, admin.deleteWorkflow);
+router.post('/link-workflow', adminAuth, admin.linkWorkflowToCampaign);
+
+// User management
+router.get('/users', adminAuth, admin.getAllUsers);
+router.get('/users/:id', adminAuth, admin.getUserById);
+router.patch('/users/:id/status', adminAuth, admin.updateUserStatus);
+
+module.exports = router;

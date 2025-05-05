@@ -1,19 +1,18 @@
+// 3. ROUTES
 // routes/whatsappRoutes.js
 const express = require('express');
-const whatsapp = require('../controllers/whatsappControllers');
-const { adminAuth, superAdminAuth } = require('../middlewares/auth');
-
 const router = express.Router();
+const whatsapp = require('../controllers/whatsappControllers');
+const { adminAuth } = require('../middlewares/auth');
 
-// WhatsApp webhook routes - public endpoints for Facebook/Meta
+// Public webhook endpoints for WhatsApp Business API
 router.get('/webhook', whatsapp.verifyWebhook);
 router.post('/webhook', whatsapp.handleWebhook);
 
-// Admin API routes to manage WhatsApp flows
+// Admin endpoints for managing WhatsApp flows
 router.post('/start-flow', adminAuth, whatsapp.startWhatsAppFlow);
 router.get('/session/:sessionId/status', adminAuth, whatsapp.getSessionStatus);
 router.get('/active-sessions', adminAuth, whatsapp.getAdminActiveSessions);
-router.get('/user/:userId/sessions', adminAuth, whatsapp.getUserSessions);
 router.post('/send-message', adminAuth, whatsapp.sendManualMessage);
 router.post('/user/:userId/reset-session', adminAuth, whatsapp.resetUserSession);
 

@@ -1,7 +1,10 @@
+// SUPER ADMIN IMPLEMENTATION
+
+// 1. MODELS
+// models/SuperAdmins.js
 const mongoose = require('mongoose');
 
-
-const superAdminSchema =new mongoose.Schema({
+const superAdminSchema = new mongoose.Schema({
     first_name: {
         type: String,
         required: true
@@ -25,9 +28,8 @@ const superAdminSchema =new mongoose.Schema({
     }
 },
 {
-    timestamps:true
-}
-);
+    timestamps: true
+});
 
 const SuperAdmin = mongoose.model("SuperAdmins", superAdminSchema);
-module.exports = {SuperAdmin};
+module.exports = { SuperAdmin };

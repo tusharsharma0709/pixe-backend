@@ -1,3 +1,4 @@
+// models/adminTokens.js
 const mongoose = require('mongoose');
 
 const adminTokenSchema = new mongoose.Schema({

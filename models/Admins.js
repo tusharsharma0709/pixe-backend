@@ -1,7 +1,23 @@
+// models/Admins.js
 const mongoose = require('mongoose');
 
+const adminAccessSchema = new mongoose.Schema({
+    accessToken: {
+        type: String
+    },
+    refreshToken: {
+        type: String
+    },
+    expiresAt: {
+        type: Date
+    },
+    isVerified: {
+        type: Boolean,
+        default: false
+    }
+});
 
-const adminSchema =new mongoose.Schema({
+const adminSchema = new mongoose.Schema({
     first_name: {
         type: String,
         required: true
@@ -25,22 +41,31 @@ const adminSchema =new mongoose.Schema({
     },
     fb_id: {
         type: String,
-        default:'null'
+        default: null
     },
     fb_password: {
         type: String,
-        default:'null'
+        default: null
+    },
+    whatsappNumber: {
+        type: String,
+        default: null
+    },
+    facebookAccess: {
+        type: adminAccessSchema,
+        default: () => ({})
+    },
+    whatsappAccess: {
+        type: adminAccessSchema,
+        default: () => ({})
     },
     status: {
         type: Boolean,
-        default: true,
-        required: true
+        default: false  // Admin remains inactive until approved by super admin
     }
-},
-{
-    timestamps:true
-}
-);
+}, {
+    timestamps: true
+});
 
 const Admin = mongoose.model("Admins", adminSchema);
-module.exports = {Admin};
+module.exports = { Admin };

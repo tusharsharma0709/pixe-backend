@@ -1,26 +1,26 @@
+// models/Products.js
 const mongoose = require('mongoose');
 
 const productSchema = new mongoose.Schema({
-    category: { 
-        type: String, 
-        required: true,
-        enum: ['Goods','Services']
-    },
-    name: { 
-        type: String, 
-        required: true 
-    },
-    image: { 
-        type: String, 
-        required: true 
-    }, 
-    description: { 
+    name: {
         type: String,
+        required: true
+    },
+    description: {
+        type: String
+    },
+    adminId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Admins',
         required: true
     },
     price: {
-        type: String,
+        type: Number,
         required: true
+    },
+    status: {
+        type: Boolean,
+        default: true
     }
 }, { timestamps: true });
 

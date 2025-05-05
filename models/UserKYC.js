@@ -1,34 +1,37 @@
+// models/UserKYC.js
 const mongoose = require('mongoose');
 
 const userKYCSchema = new mongoose.Schema({
-    userId: { 
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: "Users", 
-      required: true 
+    userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Users',
+        required: true,
+        unique: true
     },
-    aadhaarData: { 
-        type: String, 
-        default: true 
+    aadhaarNumber: {
+        type: String
     },
     panNumber: {
         type: String
     },
-    aadhaarNumber: {
-        type: Number
+    aadhaarData: {
+        type: String // JSON string of Aadhaar OCR data
+    },
+    panData: {
+        type: String // JSON string of PAN OCR data
     },
     aadhaarClientId: {
-        type: String,
-        default: null
+        type: String // For Aadhaar OTP verification
     },
     aadhaarValidationData: {
-        type: String,
-        default: null
+        type: String // JSON string of Aadhaar validation response
     },
-    panData: { 
-        type: String, 
-        default: null 
+    verificationStatus: {
+        type: String,
+        enum: ['pending', 'verified', 'rejected'],
+        default: 'pending'
     }
 }, { timestamps: true });
 
-const UserKYC = mongoose.model('User_KYC', userKYCSchema);
+const UserKYC = mongoose.model('UserKYC', userKYCSchema);
 module.exports = { UserKYC };

@@ -1,3 +1,4 @@
+// models/SuperAdminTokens.js
 const mongoose = require('mongoose');
 
 const superAdminTokenSchema = new mongoose.Schema({
@@ -22,4 +23,4 @@ const superAdminTokenSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const SuperAdminTokens = mongoose.model("superAdminTokens", superAdminTokenSchema);
-module.exports = { SuperAdminTokens };
+module.exports = {SuperAdminTokens};

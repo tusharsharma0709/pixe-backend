@@ -1,3 +1,7 @@
+// USER IMPLEMENTATION
+
+// 1. MODELS
+// models/Users.js
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
@@ -8,9 +12,8 @@ const userSchema = new mongoose.Schema({
         type: String
     },
     productId: {
-      type: mongoose.Schema.Types.ObjectId, 
-      ref: "Products", 
-      required: true 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: "Products"
     },
     phone: { 
         type: String, 
@@ -44,6 +47,18 @@ const userSchema = new mongoose.Schema({
         type: Boolean,
         required: true,
         default: false
+    },
+    workflowId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Workflows"
+    },
+    campaignId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Campaigns"
+    },
+    status: {
+        type: Boolean,
+        default: true
     }
 }, { timestamps: true });
 
