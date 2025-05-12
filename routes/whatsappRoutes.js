@@ -1,20 +1,18 @@
 // routes/whatsappRoutes.js
 const express = require('express');
-const whatsapp = require('../controllers/whatsappControllers');
-const { adminAuth, superAdminAuth } = require('../middlewares/auth');
-
 const router = express.Router();
+const WhatsAppController = require('../controllers/whatsappControllers');
+const { adminAuth, agentAuth, adminOrAgentAuth } = require('../middlewares/auth');
 
-// WhatsApp webhook routes - public endpoints for Facebook/Meta
-router.get('/webhook', whatsapp.verifyWebhook);
-router.post('/webhook', whatsapp.handleWebhook);
+// Webhook endpoints (no auth required)
+router.post('/webhook', WhatsAppController.receiveWebhook);
+router.get('/webhook', WhatsAppController.verifyWebhook);
 
-// Admin API routes to manage WhatsApp flows
-router.post('/start-flow', adminAuth, whatsapp.startWhatsAppFlow);
-router.get('/session/:sessionId/status', adminAuth, whatsapp.getSessionStatus);
-router.get('/active-sessions', adminAuth, whatsapp.getAdminActiveSessions);
-router.get('/user/:userId/sessions', adminAuth, whatsapp.getUserSessions);
-router.post('/send-message', adminAuth, whatsapp.sendManualMessage);
-router.post('/user/:userId/reset-session', adminAuth, whatsapp.resetUserSession);
+// Workflow processing
+router.post('/workflow/process', WhatsAppController.processWorkflowMessage);
+
+// Template management (admin only)
+router.get('/templates', adminAuth, WhatsAppController.getWhatsAppTemplates);
+router.post('/templates', adminAuth, WhatsAppController.createWhatsAppTemplate);
 
 module.exports = router;

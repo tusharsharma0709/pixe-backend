@@ -1,36 +1,29 @@
-// 3. ROUTES
-// routes/superadminRoutes.js
+// routes/superAdminRoutes.js
 const express = require('express');
-const superAdmin = require('../controllers/superadminControllers');
-const { adminAuth, superAdminAuth } = require('../middlewares/auth');
-
 const router = express.Router();
+const SuperAdminController = require('../controllers/superAdminControllers');
+const { superAdminAuth } = require('../middlewares/auth');
 
-// Authentication routes
-router.post('/register', superAdmin.register);
-router.post('/login', superAdmin.login);
-router.post('/logout', superAdminAuth, superAdmin.logout);
+// Public routes (only for initial setup)
+router.post('/register', SuperAdminController.register);
+router.post('/login', SuperAdminController.login);
 
-// Profile management
-router.get('/profile', superAdminAuth, superAdmin.getProfile);
-router.patch('/update-profile', superAdminAuth, superAdmin.updateProfile);
-router.post('/change-password', superAdminAuth, superAdmin.changePassword);
+// Protected routes
+router.post('/logout', superAdminAuth, SuperAdminController.logout);
 
 // Admin management
-router.get('/admins', superAdminAuth, superAdmin.getAllAdmins);
-router.get('/admin/:id', superAdminAuth, superAdmin.getAdminById);
-router.patch('/admin-status/:id', superAdminAuth, superAdmin.updateAdminStatus);
+router.get('/admins', superAdminAuth, SuperAdminController.getAllAdmins);
+router.put('/admins/:adminId/review', superAdminAuth, SuperAdminController.reviewAdmin);
+router.post('/admins/:adminId/assign-whatsapp', superAdminAuth, SuperAdminController.assignWhatsAppNumber);
 
-// User management
-router.get('/users/:id', superAdminAuth, superAdmin.getAllUsers); // Get all users of specific admin
-router.get('/user/:id', superAdminAuth, superAdmin.getUserById);
+// WhatsApp number management
+router.get('/whatsapp-numbers', superAdminAuth, SuperAdminController.getAllWhatsAppNumbers);
 
-// Campaign management
-router.post('/campaign', superAdminAuth, superAdmin.createCampaign);
-router.get('/campaigns', superAdminAuth, superAdmin.getAllCampaigns);
-router.get('/admin/:adminId/campaigns', superAdminAuth, superAdmin.getAdminCampaigns);
-router.patch('/campaign/:id/status', superAdminAuth, superAdmin.updateCampaignStatus);
-router.delete('/campaign/:id', superAdminAuth, superAdmin.deleteCampaign);
-router.post('/campaign/assign-workflow', superAdminAuth, superAdmin.assignWorkflowToCampaign);
+// Dashboard and statistics
+router.get('/dashboard/stats', superAdminAuth, SuperAdminController.getDashboardStats);
+
+// System settings
+router.get('/settings', superAdminAuth, SuperAdminController.getSystemSettings);
+router.put('/settings', superAdminAuth, SuperAdminController.updateSystemSettings);
 
 module.exports = router;

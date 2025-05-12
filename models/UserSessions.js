@@ -1,25 +1,44 @@
-// models/UserSession.js
+// models/UserSessions.js
 const mongoose = require('mongoose');
+
 const userSessionSchema = new mongoose.Schema({
     userId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Users'
+        ref: 'Users',
+        required: true
     },
     phone: {
         type: String,
-        required: true
+        required: true,
+        trim: true
     },
     campaignId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Campaigns'
+        ref: 'Campaigns',
+        default: null
     },
     workflowId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Workflows',
         required: true
     },
+    adminId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Admins',
+        default: null
+    },
+    agentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Agents',
+        default: null
+    },
     currentNodeId: {
-        type: String
+        type: String,
+        default: null
+    },
+    previousNodeId: {
+        type: String,
+        default: null
     },
     data: {
         type: mongoose.Schema.Types.Mixed,
@@ -27,12 +46,71 @@ const userSessionSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['active', 'completed', 'abandoned'],
+        enum: ['active', 'paused', 'completed', 'abandoned', 'transferred'],
         default: 'active'
     },
-    stepsCompleted: [String]
-  }, { timestamps: true });
-  
-  const UserSession = mongoose.model('UserSessions', userSessionSchema);
-  module.exports = { UserSession };
-  
+    stepsCompleted: [{
+        type: String
+    }],
+    startedAt: {
+        type: Date,
+        default: Date.now
+    },
+    completedAt: {
+        type: Date,
+        default: null
+    },
+    lastInteractionAt: {
+        type: Date,
+        default: Date.now
+    },
+    interactionCount: {
+        type: Number,
+        default: 0
+    },
+    source: {
+        type: String,
+        enum: ['whatsapp', 'app', 'web', 'agent'],
+        default: 'whatsapp'
+    },
+    sessionTimeout: {
+        type: Number,
+        default: 3600 // Timeout in seconds (default: 1 hour)
+    },
+    isExpired: {
+        type: Boolean,
+        default: false
+    },
+    sessionNotes: {
+        type: String,
+        default: null
+    },
+    transferHistory: [{
+        fromAgent: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Agents'
+        },
+        toAgent: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Agents'
+        },
+        reason: String,
+        transferredAt: {
+            type: Date,
+            default: Date.now
+        }
+    }]
+}, {
+    timestamps: true
+});
+
+// Add indexes for faster queries
+userSessionSchema.index({ userId: 1, status: 1 });
+userSessionSchema.index({ workflowId: 1, status: 1 });
+userSessionSchema.index({ adminId: 1, status: 1 });
+userSessionSchema.index({ agentId: 1, status: 1 });
+userSessionSchema.index({ lastInteractionAt: -1 });
+userSessionSchema.index({ phone: 1, status: 1 });
+
+const UserSession = mongoose.model('UserSessions', userSessionSchema);
+module.exports = { UserSession };

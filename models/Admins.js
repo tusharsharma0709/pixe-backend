@@ -14,17 +14,41 @@ const adminAccessSchema = new mongoose.Schema({
     isVerified: {
         type: Boolean,
         default: false
+    },
+    lastVerified: {
+        type: Date
+    }
+});
+
+const whatsappNumberSchema = new mongoose.Schema({
+    number: {
+        type: String,
+        required: true
+    },
+    isActive: {
+        type: Boolean,
+        default: true
+    },
+    assignedAt: {
+        type: Date,
+        default: Date.now
     }
 });
 
 const adminSchema = new mongoose.Schema({
     first_name: {
         type: String,
-        required: true
+        required: true,
+        trim: true
     },
     last_name: {
         type: String,
-        required: true
+        required: true,
+        trim: true
+    },
+    business_name: {
+        type: String,
+        trim: true
     },
     mobile: {
         type: Number,
@@ -33,7 +57,8 @@ const adminSchema = new mongoose.Schema({
     email_id: {
         type: String,
         unique: true,
-        required: true
+        required: true,
+        trim: true
     },
     password: {
         type: String,
@@ -48,7 +73,7 @@ const adminSchema = new mongoose.Schema({
         default: null
     },
     whatsappNumber: {
-        type: String,
+        type: whatsappNumberSchema,
         default: null
     },
     facebookAccess: {
@@ -62,6 +87,23 @@ const adminSchema = new mongoose.Schema({
     status: {
         type: Boolean,
         default: false  // Admin remains inactive until approved by super admin
+    },
+    rejectionReason: {
+        type: String,
+        default: null
+    },
+    superAdminNotes: {
+        type: String,
+        default: null
+    },
+    assignedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SuperAdmins',
+        default: null
+    },
+    approvedAt: {
+        type: Date,
+        default: null
     }
 }, {
     timestamps: true

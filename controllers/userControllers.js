@@ -1,1280 +1,901 @@
- // 2. CONTROLLERS
-  // controllers/userControllers.js
-  const jwt = require('jsonwebtoken');
-  const axios = require('axios');
-  const { postJSON, postFormData } = require('../services/surepassServices');
-  const { User } = require('../models/Users');
-  const { UserToken } = require('../models/userTokens');
-  const { UserSession } = require('../models/UserSessions');
-  const { AadhaarVerification } = require('../models/aadhaarVerification');
-  const { PanVerification } = require('../models/panVerification');
-  const { BankingVerification } = require('../models/bankVerification');
-  const { Product } = require('../models/Products');
-  const { Campaign } = require('../models/Campaigns');
-  const { Workflow } = require('../models/Workflows');
-  
-  // OTP generator
-  const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
-  
-  /**
-  * ✅ Send OTP for Registration
-  */
-  const registerWithOtp = async (req, res) => {
-  const { phone } = req.body;
-  
-  if (!phone) return res.status(400).json({ 
-    success: false,
-    message: 'Phone number is required' 
-  });
-  
-  try {
-    const existingUser = await User.findOne({ phone });
-  
-    if (existingUser) {
-      return res.status(409).json({ 
-        success: false,
-        message: 'User already exists' 
-      });
-    }
-  
-    const otp = generateOtp();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
-  
-    // First, send OTP
-    await sendOtpViaWhatsapp(phone, otp);
-  
-    // Only if OTP sent successfully, save user
-    const user = await User.create({ phone, otp, otpExpiresAt: expiresAt });
-  
-    return res.status(200).json({ 
-      success: true,
-      message: 'OTP sent successfully', 
-      data: { userId: user._id }
-    });
-  } catch (err) {
-    console.error('Error in registerWithOtp:', err.response?.data || err.message);
-    return res.status(500).json({ 
-      success: false,
-      message: 'Registration failed', 
-      error: err.message 
-    });
-  }
-  };
-  
-  /**
-  * ✅ Send OTP for Login
-  */
-  const loginWithOtp = async (req, res) => {
-  const { phone } = req.body;
-  
-  if (!phone) return res.status(400).json({ 
-    success: false,
-    message: 'Phone number is required' 
-  });
-  
-  try {
-    const user = await User.findOne({ phone });
-  
-    if (!user) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'User not found' 
-      });
-    }
-  
-    const otp = generateOtp();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-  
-    // First, send OTP
-    await sendOtpViaWhatsapp(phone, otp);
-  
-    // Only after successful OTP send, update DB
-    user.otp = otp;
-    user.otpExpiresAt = expiresAt;
-    user.isOtpVerified = false;
-    await user.save();
-  
-    return res.status(200).json({ 
-      success: true,
-      message: 'OTP sent for login' 
-    });
-  } catch (err) {
-    console.error('Error in loginWithOtp:', err.response?.data || err.message);
-    return res.status(500).json({ 
-      success: false,
-      message: 'Login failed', 
-      error: err.message 
-    });
-  }
-  };
-  
-  /**
-  * ✅ Verify OTP (common for both login and registration)
-  */
-  const verifyOtp = async (req, res) => {
-  const { phone, otp } = req.body;
-  
-  if (!phone || !otp) return res.status(400).json({ 
-    success: false,
-    message: 'Phone and OTP are required' 
-  });
-  
-  try {
-    const user = await User.findOne({ phone });
-  
-    if (!user) return res.status(404).json({ 
-      success: false,
-      message: 'User not found' 
-    });
-  
-    if (user.isOtpVerified) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'OTP already verified' 
-      });
-    }
-  
-    if (new Date() > user.otpExpiresAt) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'OTP expired' 
-      });
-    }
-  
-    if (user.otp !== otp) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'Invalid OTP' 
-      });
-    }
-  
-    // Update user verification status
-    // Use updateOne to avoid validation issues with null values
-    await User.updateOne(
-      { _id: user._id },
-      { 
-        $set: { isOtpVerified: true },
-        $unset: { otp: "", otpExpiresAt: "" }
-      }
-    );
-  
-    // Generate JWT token
-    const token = jwt.sign(
-      { 
-        userId: user._id,
-        phone: user.phone 
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '30d' } // Token expires in 30 days
-    );
-  
-    // Store token in UserToken model
-    // First, check if user already has a token and remove it
-    await UserToken.findOneAndDelete({ userId: user._id });
-    
-    // Create new token document
-    await UserToken.create({
-      userId: user._id,
-      token: token
-    });
-  
-    return res.status(200).json({ 
-      success: true,
-      message: 'OTP verified successfully', 
-      data: {
-        user: {
-          _id: user._id,
-          phone: user.phone,
-          isOtpVerified: true
-        },
-        token
-      }
-    });
-  } catch (err) {
-    console.error('Error in verifyOtp:', err.message);
-    return res.status(500).json({ 
-      success: false,
-      message: 'OTP verification failed', 
-      error: err.message 
-    });
-  }
-  };
-  
-  /**
-  * ✅ Helper to send OTP via WhatsApp
-  */
-  const sendOtpViaWhatsapp = async (phone, otp) => {
-    const url = `https://graph.facebook.com/v17.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
-    const headers = {
-      'Authorization': `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
-      'Content-Type': 'application/json'
-    };
-    const data = {
-      messaging_product: "whatsapp",
-      to: phone,
-      type: "template",
-      template: {
-        name: "otp_template", 
-        language: {
-          code: "en_US"
-        },
-        components: [
-          {
-            type: "body",
-            parameters: [
-              {
-                type: "text",
-                text: otp 
-              }
-            ]
-          },
-          {
-            type: "button",
-            sub_type: "url",
-            index: 0,
-            parameters: [
-              {
-                type: "text",
-                text: "copycode" // This can be any text - it's not the visible button text
-              }
-            ]
-          }
-        ]
-      }
-    };
-  
+// controllers/UserController.js
+const { User } = require('../models/Users');
+const { UserToken } = require('../models/userTokens');
+const { UserSession } = require('../models/UserSessions');
+const { LeadAssignment } = require('../models/LeadAssignments');
+const { Campaign } = require('../models/Campaigns');
+const { Workflow } = require('../models/Workflows');
+const { Admin } = require('../models/Admins');
+const { Agent } = require('../models/Agents');
+const { Message } = require('../models/Messages');
+const { Order } = require('../models/Orders');
+const { Payment } = require('../models/Payments');
+const { Verification } = require('../models/Verifications');
+const { ActivityLog } = require('../models/ActivityLogs');
+const { Notification } = require('../models/Notifications');
+const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
+const ObjectId = mongoose.Types.ObjectId;
+
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// Helper function to log activity
+const logActivity = async (data) => {
     try {
-      const response = await axios.post(url, data, { headers });
-      return response.data;
+        const activityLog = new ActivityLog(data);
+        await activityLog.save();
+        return activityLog;
     } catch (error) {
-      throw new Error(error.response?.data?.error?.message || 'Failed to send OTP');
+        console.error("Error logging activity:", error);
     }
-  };
-  
-  /**
-  * ✅ Update Profile and Select Product
-  */
-  const updateProfileAndProduct = async (req, res) => {
+};
+
+// Helper function to create notification
+const createNotification = async (data) => {
     try {
-        const { name, email_id, productId } = req.body;
-        
-        if (!name) {
-            return res.status(400).json({
-                success: false,
-                message: "Name is required"
-            });
-        }
-        
-        // Check if the product exists
-        if (productId) {
-            const product = await Product.findById(productId);
-            
-            if (!product) {
-                return res.status(404).json({
+        const notification = new Notification(data);
+        await notification.save();
+        return notification;
+    } catch (error) {
+        console.error("Error creating notification:", error);
+    }
+};
+
+// Helper function to generate OTP
+const generateOTP = () => {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+const UserController = {
+    // User registration/login via phone
+    registerOrLogin: async (req, res) => {
+        try {
+            const { phone, campaignId, workflowId, productId, source } = req.body;
+
+            // Validate required fields
+            if (!phone) {
+                return res.status(400).json({
                     success: false,
-                    message: "Product not found with the provided ID"
+                    message: "Phone number is required"
                 });
             }
-        }
-        
-        // If product exists, proceed with user update
-        const updatedUser = await User.findOneAndUpdate(
-            { _id: req.userId },
-            {
-                $set: {
-                    name,
-                    email_id,
-                    ...(productId && { productId })
+
+            // Find or create user
+            let user = await User.findOne({ phone });
+            
+            if (!user) {
+                // Get admin and workflow information if campaign ID is provided
+                let adminId = null;
+                if (campaignId) {
+                    const campaign = await Campaign.findById(campaignId);
+                    if (campaign) {
+                        adminId = campaign.adminId;
+                    }
+                } else if (workflowId) {
+                    const workflow = await Workflow.findById(workflowId);
+                    if (workflow) {
+                        adminId = workflow.adminId;
+                    }
                 }
-            },
-            { new: true } // Returns the updated document
-        );
-        
-        if (!updatedUser) {
-            return res.status(404).json({
+
+                // Create new user
+                user = new User({
+                    phone,
+                    campaignId,
+                    workflowId,
+                    productId,
+                    adminId,
+                    source: source || 'whatsapp',
+                    status: 'new'
+                });
+                await user.save();
+
+                // Log activity
+                await logActivity({
+                    actorId: user._id,
+                    actorModel: 'Users',
+                    actorName: user.phone,
+                    action: 'register',
+                    entityType: 'User',
+                    entityId: user._id,
+                    description: `User registered with phone: ${user.phone}`,
+                    adminId: user.adminId
+                });
+            }
+
+            // Generate OTP
+            const otp = generateOTP();
+            const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+
+            // Update user with OTP
+            user.otp = otp;
+            user.otpExpiresAt = otpExpiresAt;
+            user.isOtpVerified = false;
+            await user.save();
+
+            // TODO: Send OTP via SMS service
+            // await smsService.sendOTP(phone, otp);
+
+            return res.status(200).json({
+                success: true,
+                message: "OTP sent successfully",
+                data: {
+                    userId: user._id,
+                    phone: user.phone,
+                    // Remove this in production - only for testing
+                    otp: process.env.NODE_ENV === 'development' ? otp : undefined
+                }
+            });
+        } catch (error) {
+            console.error("Error in registerOrLogin:", error);
+            return res.status(500).json({
                 success: false,
-                message: "User not found"
+                message: "Internal server error",
+                error: error.message
             });
         }
-        
-        res.status(200).json({
-            success: true,
-            message: "User profile updated successfully",
-            data: {
-                _id: updatedUser._id,
-                name: updatedUser.name,
-                email_id: updatedUser.email_id,
-                phone: updatedUser.phone,
-                productId: updatedUser.productId
+    },
+
+    // Verify OTP
+    verifyOTP: async (req, res) => {
+        try {
+            const { phone, otp } = req.body;
+
+            if (!phone || !otp) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Phone and OTP are required"
+                });
             }
-        });
-    } catch (err) {
-        console.error("Error updating profile and product:", err);
-        res.status(500).json({
-            success: false,
-            message: "Internal Server Error",
-            error: err.message
-        });
-    }
-  };
-  
-  /**
-  * ✅ Get User Profile
-  */
-  const getUserProfile = async (req, res) => {
-    try {
-        const user = await User.findById(req.userId)
-            .populate('productId', 'name price')
-            .populate('campaignId', 'name');
-        
-        if (!user) {
-            return res.status(404).json({
+
+            const user = await User.findOne({ phone });
+
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    message: "User not found"
+                });
+            }
+
+            // Check if OTP is valid
+            if (user.otp !== otp) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid OTP"
+                });
+            }
+
+            // Check if OTP has expired
+            if (user.otpExpiresAt < new Date()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "OTP has expired"
+                });
+            }
+
+            // Mark OTP as verified
+            user.isOtpVerified = true;
+            user.otp = null;
+            user.otpExpiresAt = null;
+            user.status = 'active';
+            await user.save();
+
+            // Generate JWT token
+            const token = jwt.sign(
+                { userId: user._id },
+                JWT_SECRET,
+                { expiresIn: '30d' }
+            );
+
+            // Create user token record
+            const userToken = new UserToken({
+                userId: user._id,
+                token
+            });
+            await userToken.save();
+
+            // Log activity
+            await logActivity({
+                actorId: user._id,
+                actorModel: 'Users',
+                actorName: user.name || user.phone,
+                action: 'login',
+                entityType: 'User',
+                entityId: user._id,
+                description: `User verified OTP and logged in`,
+                adminId: user.adminId
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: "OTP verified successfully",
+                data: {
+                    user,
+                    token
+                }
+            });
+        } catch (error) {
+            console.error("Error in verifyOTP:", error);
+            return res.status(500).json({
                 success: false,
-                message: "User not found"
+                message: "Internal server error",
+                error: error.message
             });
         }
-        
-        // Get verification status
-        const aadhaarVerification = await AadhaarVerification.findOne({ userId: req.userId });
-        const panVerification = await PanVerification.findOne({ userId: req.userId });
-        const bankVerification = await BankingVerification.findOne({ userId: req.userId });
-        
-        const response = {
-            _id: user._id,
-            name: user.name,
-            email_id: user.email_id,
-            phone: user.phone,
-            product: user.productId,
-            campaign: user.campaignId,
-            verificationStatus: {
-                isOtpVerified: user.isOtpVerified,
-                isPanVerified: user.isPanVerified,
-                isAadhaarVerified: user.isAadhaarVerified,
-                isAadhaarValidated: user.isAadhaarValidated,
-                isBankVerified: bankVerification?.isVerified || false
+    },
+
+    // Get all users for admin
+    getAdminUsers: async (req, res) => {
+        try {
+            const adminId = req.adminId;
+            const {
+                status,
+                source,
+                campaignId,
+                workflowId,
+                assignedAgent,
+                startDate,
+                endDate,
+                search,
+                sortBy,
+                sortOrder,
+                page = 1,
+                limit = 10
+            } = req.query;
+
+            // Build query
+            const query = { adminId };
+
+            if (status) query.status = status;
+            if (source) query.source = source;
+            if (campaignId) query.campaignId = campaignId;
+            if (workflowId) query.workflowId = workflowId;
+            if (assignedAgent) query.assignedAgent = assignedAgent;
+
+            // Add date filters
+            if (startDate || endDate) {
+                query.createdAt = {};
+                if (startDate) query.createdAt.$gte = new Date(startDate);
+                if (endDate) query.createdAt.$lte = new Date(endDate);
             }
-        };
-        
-        if (aadhaarVerification) {
-            response.aadhaarDetails = {
-                isVerified: aadhaarVerification.isVerified,
-                aadhaarNumber: aadhaarVerification.aadhaarNumber ? 
-                    aadhaarVerification.aadhaarNumber.substring(0, 4) + ' XXXX XXXX' : null
+
+            if (search) {
+                query.$or = [
+                    { name: { $regex: search, $options: 'i' } },
+                    { phone: { $regex: search, $options: 'i' } },
+                    { email_id: { $regex: search, $options: 'i' } }
+                ];
+            }
+
+            // Build sort options
+            const sortOptions = {};
+            if (sortBy) {
+                sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
+            } else {
+                sortOptions.createdAt = -1; // Default to newest first
+            }
+
+            // Calculate pagination
+            const skip = (parseInt(page) - 1) * parseInt(limit);
+
+            // Get total count
+            const totalCount = await User.countDocuments(query);
+
+            // Execute query with pagination
+            const users = await User.find(query)
+                .populate('assignedAgent', 'first_name last_name')
+                .populate('campaignId', 'name')
+                .populate('workflowId', 'name')
+                .populate('productId', 'name')
+                .sort(sortOptions)
+                .skip(skip)
+                .limit(parseInt(limit));
+
+            // Get additional stats for each user
+            const usersWithStats = await Promise.all(
+                users.map(async (user) => {
+                    const sessionCount = await UserSession.countDocuments({
+                        userId: user._id
+                    });
+
+                    const messageCount = await Message.countDocuments({
+                        userId: user._id
+                    });
+
+                    const orderCount = await Order.countDocuments({
+                        userId: user._id
+                    });
+
+                    return {
+                        ...user.toObject(),
+                        stats: {
+                            sessionCount,
+                            messageCount,
+                            orderCount
+                        }
+                    };
+                })
+            );
+
+            return res.status(200).json({
+                success: true,
+                data: usersWithStats,
+                pagination: {
+                    totalRecords: totalCount,
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalCount / parseInt(limit)),
+                    limit: parseInt(limit)
+                }
+            });
+        } catch (error) {
+            console.error("Error in getAdminUsers:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
+    // Get users assigned to an agent
+    getAgentUsers: async (req, res) => {
+        try {
+            const agentId = req.agentId;
+            const {
+                status,
+                campaignId,
+                search,
+                sortBy,
+                sortOrder,
+                page = 1,
+                limit = 10
+            } = req.query;
+
+            // First get all lead assignments for this agent
+            const leadAssignments = await LeadAssignment.find({
+                agentId,
+                status: 'active'
+            }).select('userId');
+
+            const userIds = leadAssignments.map(assignment => assignment.userId);
+
+            // Build query for users
+            const query = { _id: { $in: userIds } };
+
+            if (status) query.status = status;
+            if (campaignId) query.campaignId = campaignId;
+
+            if (search) {
+                query.$or = [
+                    { name: { $regex: search, $options: 'i' } },
+                    { phone: { $regex: search, $options: 'i' } },
+                    { email_id: { $regex: search, $options: 'i' } }
+                ];
+            }
+
+            // Build sort options
+            const sortOptions = {};
+            if (sortBy) {
+                sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
+            } else {
+                sortOptions.lastActivityAt = -1; // Default to most recently active
+            }
+
+            // Calculate pagination
+            const skip = (parseInt(page) - 1) * parseInt(limit);
+
+            // Get total count
+            const totalCount = await User.countDocuments(query);
+
+            // Execute query with pagination
+            const users = await User.find(query)
+                .populate('campaignId', 'name')
+                .populate('workflowId', 'name')
+                .populate('productId', 'name')
+                .sort(sortOptions)
+                .skip(skip)
+                .limit(parseInt(limit));
+
+            // Get additional stats for each user
+            const usersWithStats = await Promise.all(
+                users.map(async (user) => {
+                    const activeSession = await UserSession.findOne({
+                        userId: user._id,
+                        status: 'active'
+                    }).sort({ createdAt: -1 });
+
+                    const unreadMessages = await Message.countDocuments({
+                        userId: user._id,
+                        sender: 'user',
+                        status: { $ne: 'read' }
+                    });
+
+                    return {
+                        ...user.toObject(),
+                        currentSession: activeSession,
+                        unreadMessages
+                    };
+                })
+            );
+
+            return res.status(200).json({
+                success: true,
+                data: usersWithStats,
+                pagination: {
+                    totalRecords: totalCount,
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalCount / parseInt(limit)),
+                    limit: parseInt(limit)
+                }
+            });
+        } catch (error) {
+            console.error("Error in getAgentUsers:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
+    // Get user by ID
+    getUser: async (req, res) => {
+        try {
+            const { id } = req.params;
+            const actorId = req.adminId || req.agentId;
+            const actorRole = req.adminId ? 'admin' : 'agent';
+
+            const user = await User.findById(id)
+                .populate('assignedAgent', 'first_name last_name')
+                .populate('campaignId', 'name')
+                .populate('workflowId', 'name')
+                .populate('productId', 'name');
+
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    message: "User not found"
+                });
+            }
+
+            // Check permissions
+            if (actorRole === 'admin' && user.adminId.toString() !== actorId) {
+                return res.status(403).json({
+                    success: false,
+                    message: "You don't have permission to view this user"
+                });
+            }
+
+            if (actorRole === 'agent') {
+                // Check if agent is assigned to this user
+                const assignment = await LeadAssignment.findOne({
+                    userId: user._id,
+                    agentId: actorId,
+                    status: 'active'
+                });
+
+                if (!assignment) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "You don't have permission to view this user"
+                    });
+                }
+            }
+
+            // Get user statistics
+            const sessionCount = await UserSession.countDocuments({
+                userId: user._id
+            });
+
+            const messageCount = await Message.countDocuments({
+                userId: user._id
+            });
+
+            const orderCount = await Order.countDocuments({
+                userId: user._id
+            });
+
+            const paymentCount = await Payment.countDocuments({
+                userId: user._id
+            });
+
+            // Get verification status
+            const verifications = await Verification.find({
+                userId: user._id
+            }).select('verificationType status createdAt');
+
+            // Get recent sessions
+            const recentSessions = await UserSession.find({
+                userId: user._id
+            })
+            .sort({ createdAt: -1 })
+            .limit(5);
+
+            // Get recent orders
+            const recentOrders = await Order.find({
+                userId: user._id
+            })
+            .sort({ createdAt: -1 })
+            .limit(5);
+
+            const userData = {
+                ...user.toObject(),
+                stats: {
+                    sessionCount,
+                    messageCount,
+                    orderCount,
+                    paymentCount
+                },
+                verifications,
+                recentSessions,
+                recentOrders
             };
+
+            return res.status(200).json({
+                success: true,
+                data: userData
+            });
+        } catch (error) {
+            console.error("Error in getUser:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
         }
-        
-        if (panVerification) {
-            response.panDetails = {
-                isVerified: panVerification.isVerified,
-                panNumber: panVerification.panNumber ? 
-                    panVerification.panNumber.substring(0, 2) + 'XXXXX' + 
-                    panVerification.panNumber.substring(7) : null
+    },
+
+    // Update user
+    updateUser: async (req, res) => {
+        try {
+            const { id } = req.params;
+            const adminId = req.adminId;
+            const {
+                name,
+                email_id,
+                status,
+                assignedAgent,
+                leadScore,
+                notes,
+                tags,
+                meta,
+                communicationPreferences
+            } = req.body;
+
+            const user = await User.findById(id);
+
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    message: "User not found"
+                });
+            }
+
+            // Check permissions
+            if (user.adminId.toString() !== adminId) {
+                return res.status(403).json({
+                    success: false,
+                    message: "You don't have permission to update this user"
+                });
+            }
+
+            // Update fields
+            if (name) user.name = name;
+            if (email_id) user.email_id = email_id;
+            if (status) user.status = status;
+            if (leadScore !== undefined) user.leadScore = leadScore;
+            if (notes) user.notes = notes;
+            if (tags) user.tags = tags;
+            if (meta) user.meta = { ...user.meta, ...meta };
+            if (communicationPreferences) {
+                user.communicationPreferences = {
+                    ...user.communicationPreferences,
+                    ...communicationPreferences
+                };
+            }
+
+            // Handle agent assignment
+            if (assignedAgent) {
+                // Check if agent exists and belongs to the admin
+                const agent = await Agent.findOne({
+                    _id: assignedAgent,
+                    adminId
+                });
+
+                if (!agent) {
+                    return res.status(404).json({
+                        success: false,
+                        message: "Agent not found"
+                    });
+                }
+
+                // Check if user already has an active assignment
+                const existingAssignment = await LeadAssignment.findOne({
+                    userId: user._id,
+                    status: 'active'
+                });
+
+                if (existingAssignment && existingAssignment.agentId.toString() !== assignedAgent) {
+                    // Complete the existing assignment
+                    existingAssignment.status = 'completed';
+                    existingAssignment.completedAt = new Date();
+                    await existingAssignment.save();
+
+                    // Create new assignment
+                    const newAssignment = new LeadAssignment({
+                        userId: user._id,
+                        agentId: assignedAgent,
+                        adminId,
+                        assignedBy: adminId,
+                        campaignId: user.campaignId,
+                        status: 'active'
+                    });
+                    await newAssignment.save();
+                }
+
+                user.assignedAgent = assignedAgent;
+            }
+
+            await user.save();
+
+            // Get admin details for logging
+            const admin = await Admin.findById(adminId);
+
+            // Log activity
+            await logActivity({
+                actorId: adminId,
+                actorModel: 'Admins',
+                actorName: admin ? `${admin.first_name} ${admin.last_name}` : null,
+                action: 'user_updated',
+                entityType: 'User',
+                entityId: user._id,
+                description: `Updated user: ${user.name || user.phone}`,
+                adminId
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: "User updated successfully",
+                data: user
+            });
+        } catch (error) {
+            console.error("Error in updateUser:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
+    // Get user analytics
+    getUserAnalytics: async (req, res) => {
+        try {
+            const adminId = req.adminId;
+            const { startDate, endDate, campaignId, workflowId } = req.query;
+
+            // Build date filter
+            const dateFilter = {};
+            if (startDate || endDate) {
+                dateFilter.createdAt = {};
+                if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
+                if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+            }
+
+            // Base query
+            const baseQuery = { adminId, ...dateFilter };
+            if (campaignId) baseQuery.campaignId = campaignId;
+            if (workflowId) baseQuery.workflowId = workflowId;
+
+            // Get total users
+            const totalUsers = await User.countDocuments(baseQuery);
+
+            // Get users by status
+            const usersByStatus = await User.aggregate([
+                { $match: baseQuery },
+                { $group: { _id: "$status", count: { $sum: 1 } } }
+            ]);
+
+            // Get users by source
+            const usersBySource = await User.aggregate([
+                { $match: baseQuery },
+                { $group: { _id: "$source", count: { $sum: 1 } } }
+            ]);
+
+            // Get users by campaign
+            const usersByCampaign = await User.aggregate([
+                { $match: { ...baseQuery, campaignId: { $ne: null } } },
+                { $group: { _id: "$campaignId", count: { $sum: 1 } } },
+                { $sort: { count: -1 } },
+                { $limit: 5 }
+            ]);
+
+            // Get campaign details
+            const campaignIds = usersByCampaign.map(item => item._id);
+            const campaigns = await Campaign.find(
+                { _id: { $in: campaignIds } },
+                { name: 1 }
+            );
+
+            // Map campaign details
+            const campaignsWithDetails = usersByCampaign.map(item => {
+                const campaign = campaigns.find(c => c._id.toString() === item._id.toString());
+                return {
+                    campaignId: item._id,
+                    count: item.count,
+                    name: campaign ? campaign.name : 'Unknown Campaign'
+                };
+            });
+
+            // Get conversion metrics
+            const convertedUsers = usersByStatus.find(item => item._id === 'converted')?.count || 0;
+            const conversionRate = totalUsers > 0 ? (convertedUsers / totalUsers) * 100 : 0;
+
+            // Get verification metrics
+            const aadhaarVerified = await User.countDocuments({
+                ...baseQuery,
+                isAadhaarVerified: true
+            });
+
+            const panVerified = await User.countDocuments({
+                ...baseQuery,
+                isPanVerified: true
+            });
+
+            // Get daily user registrations
+            const dailyRegistrations = await User.aggregate([
+                { $match: baseQuery },
+                {
+                    $group: {
+                        _id: {
+                            year: { $year: "$createdAt" },
+                            month: { $month: "$createdAt" },
+                            day: { $dayOfMonth: "$createdAt" }
+                        },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1 } }
+            ]);
+
+            // Format daily registrations
+            const formattedDailyRegistrations = dailyRegistrations.map(item => ({
+                date: new Date(item._id.year, item._id.month - 1, item._id.day).toISOString().split('T')[0],
+                count: item.count
+            }));
+
+            // Get average lead score
+            const avgLeadScore = await User.aggregate([
+                { $match: { ...baseQuery, leadScore: { $ne: null } } },
+                { $group: { _id: null, avgScore: { $avg: "$leadScore" } } }
+            ]);
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    totalUsers,
+                    usersByStatus: usersByStatus.reduce((acc, curr) => {
+                        acc[curr._id] = curr.count;
+                        return acc;
+                    }, {}),
+                    usersBySource: usersBySource.reduce((acc, curr) => {
+                        acc[curr._id] = curr.count;
+                        return acc;
+                    }, {}),
+                    topCampaigns: campaignsWithDetails,
+                    conversionRate: parseFloat(conversionRate.toFixed(2)),
+                    verificationMetrics: {
+                        aadhaarVerified,
+                        panVerified,
+                        aadhaarVerificationRate: totalUsers > 0 ? parseFloat(((aadhaarVerified / totalUsers) * 100).toFixed(2)) : 0,
+                        panVerificationRate: totalUsers > 0 ? parseFloat(((panVerified / totalUsers) * 100).toFixed(2)) : 0
+                    },
+                    avgLeadScore: avgLeadScore[0]?.avgScore || 0,
+                    dailyRegistrations: formattedDailyRegistrations
+                }
+            });
+        } catch (error) {
+            console.error("Error in getUserAnalytics:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
+    // Update user profile (for users themselves)
+    updateProfile: async (req, res) => {
+        try {
+            const userId = req.userId;
+            const { name, email_id, communicationPreferences } = req.body;
+
+            const user = await User.findById(userId);
+
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    message: "User not found"
+                });
+            }
+
+            // Update allowed fields
+            if (name) user.name = name;
+            if (email_id) user.email_id = email_id;
+            if (communicationPreferences) {
+                user.communicationPreferences = {
+                    ...user.communicationPreferences,
+                    ...communicationPreferences
+                };
+            }
+
+            await user.save();
+
+            return res.status(200).json({
+                success: true,
+                message: "Profile updated successfully",
+                data: user
+            });
+        } catch (error) {
+            console.error("Error in updateProfile:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
+    // Get user profile (for users themselves)
+    getProfile: async (req, res) => {
+        try {
+            const userId = req.userId;
+
+            const user = await User.findById(userId)
+                .populate('campaignId', 'name')
+                .populate('workflowId', 'name')
+                .populate('productId', 'name')
+                .populate('assignedAgent', 'first_name last_name');
+
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    message: "User not found"
+                });
+            }
+
+            // Get user's verification status
+            const verifications = await Verification.find({
+                userId: user._id
+            }).select('verificationType status completedAt');
+
+            // Get recent orders
+            const recentOrders = await Order.find({
+                userId: user._id
+            })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .select('orderNumber status totalAmount createdAt');
+
+            const userData = {
+                ...user.toObject(),
+                verifications,
+                recentOrders
             };
+
+            return res.status(200).json({
+                success: true,
+                data: userData
+            });
+        } catch (error) {
+            console.error("Error in getProfile:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
         }
-        
-        if (bankVerification) {
-            response.bankDetails = {
-                isVerified: bankVerification.isVerified,
-                accountNumber: bankVerification.accountNumber ? 
-                    'XXXXXXXX' + bankVerification.accountNumber.slice(-4) : null,
-                ifscCode: bankVerification.ifscCode,
-                bankName: bankVerification.bankName
-            };
-        }
-        
-        res.status(200).json({
-            success: true,
-            message: "User profile fetched successfully",
-            data: response
-        });
-    } catch (err) {
-        console.error("Error fetching user profile:", err);
-        res.status(500).json({
-            success: false,
-            message: "Internal Server Error",
-            error: err.message
-        });
     }
-  };
-  
-  /**
-  * ✅ Helper function to check if names match
-  */
-  const doNamesMatch = (dbName, aadhaarName) => {
-  if (!dbName || !aadhaarName) return false;
-  
-  // Convert both names to lowercase and remove extra spaces
-  const normalizedDbName = dbName.toLowerCase().replace(/\s+/g, ' ').trim();
-  const normalizedAadhaarName = aadhaarName.toLowerCase().replace(/\s+/g, ' ').trim();
-  
-  // Check for exact match first
-  if (normalizedDbName === normalizedAadhaarName) {
-    return true;
-  }
-  
-  // Check if one name contains the other (for partial matches)
-  return normalizedAadhaarName.includes(normalizedDbName) || 
-         normalizedDbName.includes(normalizedAadhaarName);
-  };
-  
-  /**
-  * ✅ Upload and Process Aadhaar Card (OCR)
-  */
-  const aadhaarOCR = async (req, res) => {
-  try {
-    // Get userId from request (assuming it comes from auth middleware)
-    const userId = req.userId;
-    
-    // Check if user exists
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-    
-    // Check if user is already Aadhaar verified
-    let aadhaarVerification = await AadhaarVerification.findOne({ userId });
-    if (aadhaarVerification && aadhaarVerification.ocrVerified) {
-      // User is already verified via OCR
-      return res.status(200).json({
-        success: true,
-        message: 'Aadhaar OCR already verified',
-        data: {
-          isVerified: aadhaarVerification.isVerified,
-          ocrVerified: aadhaarVerification.ocrVerified
-        }
-      });
-    }
-    
-    // Check for files
-    if (!req.files || !req.files.aadhaarFront || !req.files.aadhaarBack) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Both Aadhaar front and back documents are required' 
-      });
-    }
-    
-    const frontFile = req.files.aadhaarFront[0];
-    const backFile = req.files.aadhaarBack[0];
-    
-    // Process front side
-    const frontResult = await postFormData('/api/v1/ocr/aadhaar', frontFile.buffer, 'file');
-    
-    // Check if front processing was successful
-    if (!frontResult || !frontResult.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Failed to extract information from Aadhaar front document',
-        error: frontResult?.error || 'OCR processing failed'
-      });
-    }
-    
-    // Process back side
-    const backResult = await postFormData('/api/v1/ocr/aadhaar', backFile.buffer, 'file');
-    
-    // Check if back processing was successful
-    if (!backResult || !backResult.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Failed to extract information from Aadhaar back document',
-        error: backResult?.error || 'OCR processing failed'
-      });
-    }
-    
-    // Both front and back were successful, merge the data
-    const mergedData = {
-      front: frontResult.data,
-      back: backResult.data
-    };
-    
-    // Extract name from Aadhaar data
-    let aadhaarName = null;
-    
-    // Extract name from the correct location in the response structure
-    if (frontResult.data && 
-        frontResult.data.ocr_fields && 
-        frontResult.data.ocr_fields.length > 0 &&
-        frontResult.data.ocr_fields[0].full_name) {
-      aadhaarName = frontResult.data.ocr_fields[0].full_name.value;
-    }
-    
-    // Extract Aadhaar number
-    let aadhaarNumber = null;
-    
-    if (frontResult.data && 
-        frontResult.data.ocr_fields && 
-        frontResult.data.ocr_fields.length > 0 &&
-        frontResult.data.ocr_fields[0].aadhaar_number) {
-      aadhaarNumber = frontResult.data.ocr_fields[0].aadhaar_number.value;
-    }
-    
-    // Get DB name
-    const dbName = user.name || '';
-    
-    // Check if Aadhaar name was found
-    if (!aadhaarName) {
-      return res.status(400).json({
-        success: false,
-        message: 'Could not extract name from Aadhaar card',
-        data: {
-          registeredName: dbName,
-          aadhaarData: mergedData
-        }
-      });
-    }
-    
-    // Check if names match
-    if (dbName && !doNamesMatch(dbName, aadhaarName)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Name in Aadhaar card does not match your registered name',
-        data: {
-          dbName: dbName,
-          aadhaarName: aadhaarName
-        }
-      });
-    }
-    
-    // Create or update Aadhaar verification record
-    if (!aadhaarVerification) {
-      aadhaarVerification = new AadhaarVerification({
-        userId,
-        aadhaarNumber,
-        aadhaarData: JSON.stringify(mergedData),
-        ocrVerified: true,
-        isVerified: false, // Not fully verified until OTP step is complete
-        verificationDate: new Date()
-      });
-    } else {
-      aadhaarVerification.aadhaarNumber = aadhaarNumber;
-      aadhaarVerification.aadhaarData = JSON.stringify(mergedData);
-      aadhaarVerification.ocrVerified = true;
-      aadhaarVerification.verificationDate = new Date();
-    }
-    
-    await aadhaarVerification.save();
-    
-    // Update user verification status for OCR step
-    user.isAadhaarVerified = true;
-    await user.save();
-    
-    return res.status(200).json({
-      success: true,
-      message: 'Aadhaar OCR processed successfully',
-      data: {
-        aadhaarName,
-        aadhaarNumber: aadhaarNumber ? aadhaarNumber.substring(0, 4) + ' XXXX XXXX' : null,
-        isOcrVerified: true
-      }
-    });
-    
-  } catch (error) {
-    console.error('Error in Aadhaar OCR:', error);
-    
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-  };
-  
-  /**
-  * ✅ Upload and Process PAN Card (OCR)
-  */
-  const panOCR = async (req, res) => {
-  try {
-    // Get userId from request (assuming it comes from auth middleware)
-    const userId = req.userId;
-    
-    // Check if user exists
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-    
-    // Check if Aadhaar is verified first
-    if (!user.isAadhaarVerified) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please verify your Aadhaar first'
-      });
-    }
-    
-    // Check if user is already PAN verified
-    let panVerification = await PanVerification.findOne({ userId });
-    if (panVerification && panVerification.isVerified) {
-      return res.status(200).json({
-        success: true,
-        message: 'PAN already verified',
-        data: {
-          isVerified: true,
-          panNumber: panVerification.panNumber ? 
-            panVerification.panNumber.substring(0, 2) + 'XXXXX' + 
-            panVerification.panNumber.substring(7) : null
-        }
-      });
-    }
-    
-    // Check for PAN document
-    if (!req.file) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'PAN document is required' 
-      });
-    }
-    
-    // Call Surepass API for PAN OCR
-    const ocrResult = await postFormData('/api/v1/ocr/pan', req.file.buffer, 'file');
-    
-    // Check if processing was successful
-    if (!ocrResult || !ocrResult.success) {
-      return res.status(400).json({
-        success: false,
-        message: 'Failed to extract information from PAN document',
-        error: ocrResult?.error || 'OCR processing failed'
-      });
-    }
-    
-    // Extract name from PAN data based on the actual response structure
-    let panName = null;
-    
-    if (ocrResult.data && 
-        ocrResult.data.ocr_fields && 
-        ocrResult.data.ocr_fields.length > 0 &&
-        ocrResult.data.ocr_fields[0].full_name) {
-      panName = ocrResult.data.ocr_fields[0].full_name.value;
-    }
-    
-    // Extract PAN number
-    let panNumber = null;
-    
-    if (ocrResult.data && 
-        ocrResult.data.ocr_fields && 
-        ocrResult.data.ocr_fields.length > 0 &&
-        ocrResult.data.ocr_fields[0].pan_number) {
-      panNumber = ocrResult.data.ocr_fields[0].pan_number.value;
-    }
-    
-    // Get DB name
-    const dbName = user.name || '';
-    
-    // Check if PAN name was found
-    if (!panName) {
-      return res.status(400).json({
-        success: false,
-        message: 'Could not extract name from PAN card',
-        data: {
-          registeredName: dbName,
-          panData: ocrResult.data
-        }
-      });
-    }
-    
-    // Check if names match
-    if (dbName && !doNamesMatch(dbName, panName)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Name in PAN card does not match your registered name',
-        data: {
-          registeredName: dbName,
-          panName: panName
-        }
-      });
-    }
-    
-    // Create or update PAN verification record
-    if (!panVerification) {
-      panVerification = new PanVerification({
-        userId,
-        panNumber,
-        panData: JSON.stringify(ocrResult.data),
-        isVerified: true,
-        nameOnPan: panName,
-        verificationDate: new Date()
-      });
-    } else {
-      panVerification.panNumber = panNumber;
-      panVerification.panData = JSON.stringify(ocrResult.data);
-      panVerification.isVerified = true;
-      panVerification.nameOnPan = panName;
-      panVerification.verificationDate = new Date();
-    }
-    
-    await panVerification.save();
-    
-    // Update user verification status
-    user.isPanVerified = true;
-    await user.save();
-    
-    return res.status(200).json({
-      success: true,
-      message: 'PAN document processed successfully',
-      data: {
-        panName,
-        panNumber: panNumber ? 
-          panNumber.substring(0, 2) + 'XXXXX' + panNumber.substring(7) : null,
-        isVerified: true
-      }
-    });
-    
-  } catch (error) {
-    console.error('Error in PAN OCR:', error);
-    
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: error.message
-    });
-  }
-  };
-  
-  /**
- * ✅ Check if Aadhaar and PAN are linked
- */
-const aadhaarPanLink = async (req, res) => {
-    try {
-      // Get userId from request (assuming it comes from auth middleware)
-      const userId = req.userId;
-      
-      // Check if user exists
-      const user = await User.findById(userId);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-      
-      // Check if Aadhaar is verified
-      if (!user.isAadhaarVerified) {
-        return res.status(400).json({
-          success: false,
-          message: 'Aadhaar is not verified yet. Please verify your Aadhaar first.'
-        });
-      }
-      
-      // Check if PAN is verified
-      if (!user.isPanVerified) {
-        return res.status(400).json({
-          success: false,
-          message: 'PAN is not verified yet. Please verify your PAN first.'
-        });
-      }
-      
-      // Get verification records
-      const aadhaarVerification = await AadhaarVerification.findOne({ userId });
-      const panVerification = await PanVerification.findOne({ userId });
-      
-      if (!aadhaarVerification || !panVerification) {
-        return res.status(400).json({
-          success: false,
-          message: 'Verification records not found. Please complete verification process first.'
-        });
-      }
-      
-      // Check if Aadhaar number is present
-      if (!aadhaarVerification.aadhaarNumber) {
-        return res.status(400).json({
-          success: false,
-          message: 'Aadhaar number is missing in verification records. Please verify your Aadhaar again.'
-        });
-      }
-      
-      // Check if PAN number is present
-      if (!panVerification.panNumber) {
-        return res.status(400).json({
-          success: false,
-          message: 'PAN number is missing in verification records. Please verify your PAN again.'
-        });
-      }
-      
-      // Call Surepass API to check if Aadhaar and PAN are linked
-      const linkCheckData = {
-        id_number: aadhaarVerification.aadhaarNumber,
-        consent: "Y",
-        pan_number: panVerification.panNumber
-      };
-      
-      const linkCheckResult = await postJSON('/api/v1/pan-aadhaar-link/pan-link-status', linkCheckData);
-      
-      if (linkCheckResult && linkCheckResult.success) {
-        return res.status(200).json({
-          success: true,
-          message: 'Aadhaar and PAN link status checked successfully',
-          data: linkCheckResult.data
-        });
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: 'Failed to check Aadhaar-PAN link',
-          error: linkCheckResult?.error || 'API call failed'
-        });
-      }
-    } catch (error) {
-      console.error('Error in verifying Aadhaar-PAN link:', error);
-      
-      return res.status(500).json({
-        success: false,
-        message: 'Internal server error',
-        error: error.message
-      });
-    }
-  };
-  
-  /**
-   * ✅ Generate Aadhaar OTP for verification
-   */
-  const generateAadhaarOTP = async (req, res) => {
-    try {
-      // Get userId from request (assuming it comes from auth middleware)
-      const userId = req.userId;
-      
-      // Check if user exists
-      const user = await User.findById(userId);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-      
-      // Check if Aadhaar is already verified in primary verification
-      if (!user.isAadhaarVerified) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please complete Aadhaar OCR verification first'
-        });
-      }
-      
-      // Check if already validated
-      if (user.isAadhaarValidated) {
-        return res.status(200).json({
-          success: true,
-          message: 'Aadhaar is already validated',
-          data: {
-            isAadhaarValidated: true
-          }
-        });
-      }
-      
-      // Get Aadhaar verification data
-      const aadhaarVerification = await AadhaarVerification.findOne({ userId });
-      
-      if (!aadhaarVerification) {
-        return res.status(400).json({
-          success: false,
-          message: 'Aadhaar verification record not found. Please complete Aadhaar OCR verification first.'
-        });
-      }
-      
-      // Check if Aadhaar number is present
-      if (!aadhaarVerification.aadhaarNumber) {
-        return res.status(400).json({
-          success: false,
-          message: 'Aadhaar number is missing in verification records. Please verify your Aadhaar again.'
-        });
-      }
-      
-      // Call Surepass API to generate OTP
-      const otpRequestData = {
-        id_number: aadhaarVerification.aadhaarNumber
-      };
-      
-      const otpResult = await postJSON('/api/v1/aadhaar-v2/generate-otp', otpRequestData);
-      
-      if (otpResult && otpResult.success) {
-        // Store the client_id temporarily in the verification record for use when submitting OTP
-        aadhaarVerification.aadhaarClientId = otpResult.data.client_id;
-        await aadhaarVerification.save();
-        
-        return res.status(200).json({
-          success: true,
-          message: 'OTP sent to registered mobile number',
-          data: {
-            client_id: otpResult.data.client_id
-          }
-        });
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: 'Failed to generate OTP',
-          error: otpResult?.error || 'OTP generation failed'
-        });
-      }
-      
-    } catch (error) {
-      console.error('Error in generating Aadhaar OTP:', error);
-      
-      return res.status(500).json({
-        success: false,
-        message: 'Internal server error',
-        error: error.message
-      });
-    }
-  };
-  
-  /**
-   * ✅ Verify Aadhaar OTP
-   */
-  const verifyAadhaarOTP = async (req, res) => {
-    try {
-      // Get userId from request
-      const userId = req.userId;
-      
-      // Get OTP from request body
-      const { otp } = req.body;
-      
-      if (!otp) {
-        return res.status(400).json({
-          success: false,
-          message: 'OTP is required'
-        });
-      }
-      
-      // Check if user exists
-      const user = await User.findById(userId);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-      
-      // Get Aadhaar verification data
-      const aadhaarVerification = await AadhaarVerification.findOne({ userId });
-      
-      if (!aadhaarVerification) {
-        return res.status(400).json({
-          success: false,
-          message: 'Aadhaar verification record not found. Please complete Aadhaar OCR verification first.'
-        });
-      }
-      
-      // Check if client_id is present
-      if (!aadhaarVerification.aadhaarClientId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Aadhaar client ID not found. Please generate OTP first.'
-        });
-      }
-      
-      // Call Surepass API to verify OTP
-      const verifyOtpData = {
-        client_id: aadhaarVerification.aadhaarClientId,
-        otp: otp
-      };
-      
-      const verifyResult = await postJSON('/api/v1/aadhaar-v2/submit-otp', verifyOtpData);
-      
-      if (verifyResult && verifyResult.success) {
-        // Update user model to mark Aadhaar as validated
-        user.isAadhaarValidated = true;
-        await user.save();
-        
-        // Update verification record
-        aadhaarVerification.otpVerified = true;
-        aadhaarVerification.isVerified = true;
-        aadhaarVerification.validationData = JSON.stringify(verifyResult.data);
-        await aadhaarVerification.save();
-        
-        return res.status(200).json({
-          success: true,
-          message: 'Aadhaar validated successfully',
-          data: {
-            isAadhaarValidated: true
-          }
-        });
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: 'Failed to verify OTP',
-          error: verifyResult?.error || 'OTP verification failed'
-        });
-      }
-      
-    } catch (error) {
-      console.error('Error in verifying Aadhaar OTP:', error);
-      
-      return res.status(500).json({
-        success: false,
-        message: 'Internal server error',
-        error: error.message
-      });
-    }
-  };
-  
-  /**
-   * ✅ Add or update bank account details
-   */
-  const updateBankAccount = async (req, res) => {
-    try {
-      const { accountNumber, ifscCode, bankName, accountHolderName } = req.body;
-      const userId = req.userId;
-      
-      // Validate required fields
-      if (!accountNumber || !ifscCode || !accountHolderName) {
-        return res.status(400).json({
-          success: false,
-          message: 'Account number, IFSC code, and account holder name are required'
-        });
-      }
-      
-      // Check if user exists
-      const user = await User.findById(userId);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-      
-      // Find or create banking verification record
-      let bankingVerification = await BankingVerification.findOne({ userId });
-      
-      if (!bankingVerification) {
-        bankingVerification = new BankingVerification({
-          userId,
-          accountNumber,
-          ifscCode,
-          bankName: bankName || '',
-          accountHolderName,
-          isVerified: false
-        });
-      } else {
-        bankingVerification.accountNumber = accountNumber;
-        bankingVerification.ifscCode = ifscCode;
-        bankingVerification.bankName = bankName || bankingVerification.bankName;
-        bankingVerification.accountHolderName = accountHolderName;
-        bankingVerification.isVerified = false; // Reset verification status when details change
-      }
-      
-      await bankingVerification.save();
-      
-      res.status(200).json({
-        success: true,
-        message: 'Banking details updated successfully',
-        data: {
-          accountNumber: accountNumber,
-          ifscCode: ifscCode,
-          bankName: bankingVerification.bankName,
-          accountHolderName: accountHolderName,
-          isVerified: false
-        }
-      });
-    } catch (error) {
-      console.error('Error updating banking details:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Internal server error',
-        error: error.message
-      });
-    }
-  };
-  
-  /**
-   * ✅ Verify bank account using penny drop
-   */
-  const verifyBankAccount = async (req, res) => {
-    try {
-      const userId = req.userId;
-      
-      // Get banking details
-      const bankingVerification = await BankingVerification.findOne({ userId });
-      if (!bankingVerification) {
-        return res.status(404).json({
-          success: false,
-          message: 'Banking details not found. Please add your banking details first.'
-        });
-      }
-      
-      // If already verified, return success
-      if (bankingVerification.isVerified) {
-        return res.status(200).json({
-          success: true,
-          message: 'Bank account already verified',
-          data: {
-            isVerified: true,
-            accountHolderName: bankingVerification.accountHolderName,
-            accountNumber: 'XXXXXXXX' + bankingVerification.accountNumber.slice(-4),
-            ifscCode: bankingVerification.ifscCode,
-            bankName: bankingVerification.bankName
-          }
-        });
-      }
-      
-      // Call SurePass API for penny drop verification
-      const pennyDropData = {
-        account_number: bankingVerification.accountNumber,
-        ifsc: bankingVerification.ifscCode,
-        name: bankingVerification.accountHolderName,
-        mobile: null // Optional
-      };
-      
-      const pennyDropResult = await postJSON('/api/v1/penny-drop/sync', pennyDropData);
-      
-      if (pennyDropResult && pennyDropResult.success) {
-        // Update banking verification record
-        bankingVerification.isVerified = true;
-        bankingVerification.verificationMethod = 'penny-drop';
-        bankingVerification.verificationData = JSON.stringify(pennyDropResult.data);
-        bankingVerification.verificationDate = new Date();
-        await bankingVerification.save();
-        
-        return res.status(200).json({
-          success: true,
-          message: 'Bank account verified successfully',
-          data: {
-            isVerified: true,
-            accountHolderName: bankingVerification.accountHolderName,
-            accountNumber: 'XXXXXXXX' + bankingVerification.accountNumber.slice(-4),
-            ifscCode: bankingVerification.ifscCode,
-            bankName: bankingVerification.bankName
-          }
-        });
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: 'Failed to verify bank account',
-          error: pennyDropResult?.error || 'Penny drop verification failed'
-        });
-      }
-    } catch (error) {
-      console.error('Error verifying bank account:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Internal server error',
-        error: error.message
-      });
-    }
-  };
-  
-  /**
-   * ✅ Get User's Workflow Status
-   */
-  const getUserWorkflowStatus = async (req, res) => {
-    try {
-      const userId = req.userId;
-      
-      // Check if user exists
-      const user = await User.findById(userId);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-      
-      if (!user.workflowId) {
-        return res.status(404).json({
-          success: false,
-          message: 'No workflow associated with this user'
-        });
-      }
-      
-      // Get the active session
-      const session = await UserSession.findOne({
-        userId: user._id,
-        status: 'active'
-      }).sort({ createdAt: -1 });
-      
-      // Get the workflow
-      const workflow = await Workflow.findById(user.workflowId);
-      
-      if (!workflow) {
-        return res.status(404).json({
-          success: false,
-          message: 'Workflow not found'
-        });
-      }
-      
-      // Get current node information
-      let currentNodeInfo = null;
-      if (session && session.currentNodeId) {
-        const currentNode = workflow.nodes.find(node => node.nodeId === session.currentNodeId);
-        if (currentNode) {
-          currentNodeInfo = {
-            nodeId: currentNode.nodeId,
-            type: currentNode.type,
-            name: currentNode.name
-          };
-        }
-      }
-      
-      // Get all sessions for this user and workflow
-      const allSessions = await UserSession.find({
-        userId: user._id,
-        workflowId: user.workflowId
-      }).sort({ createdAt: -1 });
-      
-      // Count completed nodes from all sessions
-      const completedNodes = new Set();
-      allSessions.forEach(s => {
-        if (s.stepsCompleted && Array.isArray(s.stepsCompleted)) {
-          s.stepsCompleted.forEach(nodeId => completedNodes.add(nodeId));
-        }
-      });
-      
-      // Calculate progress percentage
-      const totalNodes = workflow.nodes.length;
-      const progress = totalNodes > 0 
-        ? (completedNodes.size / totalNodes) * 100 
-        : 0;
-      
-      const response = {
-        workflowName: workflow.name,
-        workflowId: workflow._id,
-        currentSession: session ? {
-          sessionId: session._id,
-          status: session.status,
-          currentNode: currentNodeInfo,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt
-        } : null,
-        progress: progress.toFixed(2) + '%',
-        completedNodes: completedNodes.size,
-        totalNodes: totalNodes,
-        allSessions: allSessions.map(s => ({
-          sessionId: s._id,
-          status: s.status,
-          createdAt: s.createdAt,
-          updatedAt: s.updatedAt
-        }))
-      };
-      
-      res.status(200).json({
-        success: true,
-        message: 'User workflow status fetched successfully',
-        data: response
-      });
-    } catch (error) {
-      console.error('Error fetching user workflow status:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Internal server error',
-        error: error.message
-      });
-    }
-  };
-  
-  module.exports = {
-    registerWithOtp,
-    loginWithOtp,
-    verifyOtp,
-    updateProfileAndProduct,
-    getUserProfile,
-    getUserWorkflowStatus,
-    aadhaarOCR,
-    panOCR,
-    aadhaarPanLink,
-    generateAadhaarOTP,
-    verifyAadhaarOTP,
-    updateBankAccount,
-    verifyBankAccount
-  };
-  
+};
+
+module.exports = UserController;

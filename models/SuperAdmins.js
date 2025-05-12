@@ -1,17 +1,16 @@
-// SUPER ADMIN IMPLEMENTATION
-
-// 1. MODELS
 // models/SuperAdmins.js
 const mongoose = require('mongoose');
 
 const superAdminSchema = new mongoose.Schema({
     first_name: {
         type: String,
-        required: true
+        required: true,
+        trim: true
     },
     last_name: {
         type: String,
-        required: true
+        required: true,
+        trim: true
     },
     mobile: {
         type: Number,
@@ -20,14 +19,14 @@ const superAdminSchema = new mongoose.Schema({
     email_id: {
         type: String,
         unique: true,
-        required: true
+        required: true,
+        trim: true
     },
     password: {
         type: String,
         required: true
     }
-},
-{
+}, {
     timestamps: true
 });
 

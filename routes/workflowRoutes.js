@@ -1,19 +1,35 @@
-// 3. ROUTES
-// routes/whatsappRoutes.js
+// routes/workflowRoutes.js
 const express = require('express');
 const router = express.Router();
-const whatsapp = require('../controllers/whatsappControllers');
+const WorkflowController = require('../controllers/workflowControllers');
 const { adminAuth } = require('../middlewares/auth');
 
-// Public webhook endpoints for WhatsApp Business API
-router.get('/webhook', whatsapp.verifyWebhook);
-router.post('/webhook', whatsapp.handleWebhook);
+// All routes require admin authentication
+// Create a new workflow
+router.post('/', adminAuth, WorkflowController.createWorkflow);
 
-// Admin endpoints for managing WhatsApp flows
-router.post('/start-flow', adminAuth, whatsapp.startWhatsAppFlow);
-router.get('/session/:sessionId/status', adminAuth, whatsapp.getSessionStatus);
-router.get('/active-sessions', adminAuth, whatsapp.getAdminActiveSessions);
-router.post('/send-message', adminAuth, whatsapp.sendManualMessage);
-router.post('/user/:userId/reset-session', adminAuth, whatsapp.resetUserSession);
+// Get all workflows for an admin
+router.get('/admin', adminAuth, WorkflowController.getAdminWorkflows);
+
+// Get workflow templates
+router.get('/templates', adminAuth, WorkflowController.getWorkflowTemplates);
+
+// Get specific workflow by ID
+router.get('/:id', adminAuth, WorkflowController.getWorkflow);
+
+// Update workflow
+router.patch('/:id', adminAuth, WorkflowController.updateWorkflow);
+
+// Delete workflow
+router.delete('/:id', adminAuth, WorkflowController.deleteWorkflow);
+
+// Clone workflow
+router.post('/:id/clone', adminAuth, WorkflowController.cloneWorkflow);
+
+// Test workflow with sample data
+router.post('/:id/test', adminAuth, WorkflowController.testWorkflow);
+
+// Get workflow analytics
+router.get('/:id/analytics', adminAuth, WorkflowController.getWorkflowAnalytics);
 
 module.exports = router;
