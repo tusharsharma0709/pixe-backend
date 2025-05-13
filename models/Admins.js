@@ -1,41 +1,65 @@
 // models/Admins.js
 const mongoose = require('mongoose');
 
-const adminAccessSchema = new mongoose.Schema({
-    accessToken: {
-        type: String
-    },
-    refreshToken: {
-        type: String
-    },
-    expiresAt: {
-        type: Date
-    },
-    isVerified: {
-        type: Boolean,
-        default: false
-    },
-    lastVerified: {
-        type: Date
-    }
-});
-
-const whatsappNumberSchema = new mongoose.Schema({
-    number: {
+const facebookAppSchema = new mongoose.Schema({
+    appId: {
         type: String,
         required: true
     },
-    isActive: {
-        type: Boolean,
-        default: true
+    appSecret: {
+        type: String,
+        required: true
     },
-    assignedAt: {
+    appName: {
+        type: String,
+        required: true
+    },
+    status: {
+        type: String,
+        enum: ['active', 'inactive', 'pending'],
+        default: 'active'
+    },
+    createdBySuper: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SuperAdmins'
+    },
+    createdAt: {
         type: Date,
         default: Date.now
     }
 });
 
+const whatsappVerificationSchema = new mongoose.Schema({
+    phoneNumber: {
+        type: String,
+        required: true
+    },
+    phoneNumberId: {
+        type: String,
+        default: null
+    },
+    businessAccountId: {
+        type: String,
+        default: null
+    },
+    isVerified: {
+        type: Boolean,
+        default: false
+    },
+    verifiedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SuperAdmins'
+    },
+    verifiedAt: {
+        type: Date
+    },
+    lastChecked: {
+        type: Date
+    }
+});
+
 const adminSchema = new mongoose.Schema({
+    // Basic Information
     first_name: {
         type: String,
         required: true,
@@ -52,41 +76,74 @@ const adminSchema = new mongoose.Schema({
     },
     mobile: {
         type: Number,
-        required: true
+        required: true,
+        unique: true
     },
     email_id: {
         type: String,
         unique: true,
         required: true,
-        trim: true
+        trim: true,
+        lowercase: true
     },
     password: {
         type: String,
         required: true
     },
+    
+    // Facebook Credentials
     fb_id: {
         type: String,
-        default: null
+        required: true
     },
     fb_password: {
         type: String,
+        required: true
+    },
+    fb_credentials_verified: {
+        type: Boolean,
+        default: false
+    },
+    fb_verification_date: {
+        type: Date
+    },
+    
+    // WhatsApp Configuration (provided during registration)
+    requestedWhatsappNumber: {
+        type: String,
+        required: true
+    },
+    
+    // Facebook App Details (created by super admin)
+    facebookApp: {
+        type: facebookAppSchema,
         default: null
     },
-    whatsappNumber: {
-        type: whatsappNumberSchema,
+    
+    // WhatsApp Verification (done by super admin)
+    whatsappVerification: {
+        type: whatsappVerificationSchema,
         default: null
     },
-    facebookAccess: {
-        type: adminAccessSchema,
-        default: () => ({})
-    },
-    whatsappAccess: {
-        type: adminAccessSchema,
-        default: () => ({})
-    },
+    
+    // Admin Status
     status: {
         type: Boolean,
         default: false  // Admin remains inactive until approved by super admin
+    },
+    approvalStage: {
+        type: String,
+        enum: ['pending_review', 'fb_verified', 'app_created', 'whatsapp_verified', 'approved', 'rejected'],
+        default: 'pending_review'
+    },
+    
+    // Super Admin Actions
+    reviewedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SuperAdmins'
+    },
+    reviewedAt: {
+        type: Date
     },
     rejectionReason: {
         type: String,
@@ -96,17 +153,72 @@ const adminSchema = new mongoose.Schema({
         type: String,
         default: null
     },
-    assignedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'SuperAdmins',
-        default: null
-    },
-    approvedAt: {
-        type: Date,
-        default: null
+    
+    // Auto-approved or requires manual review
+    requiresManualReview: {
+        type: Boolean,
+        default: true
     }
 }, {
     timestamps: true
+});
+
+// Indexes - only define compound indexes, as unique fields already create indexes
+adminSchema.index({ approvalStage: 1, status: 1 });
+adminSchema.index({ createdAt: -1 });
+adminSchema.index({ 'whatsappVerification.isVerified': 1, status: 1 });
+
+// Virtual for full name
+adminSchema.virtual('fullName').get(function() {
+    return `${this.first_name} ${this.last_name}`;
+});
+
+// Method to check if admin is fully approved
+adminSchema.methods.isFullyApproved = function() {
+    return this.status === true && this.approvalStage === 'approved';
+};
+
+// Method to get approval progress
+adminSchema.methods.getApprovalProgress = function() {
+    const stages = ['pending_review', 'fb_verified', 'app_created', 'whatsapp_verified', 'approved'];
+    const currentIndex = stages.indexOf(this.approvalStage);
+    const totalStages = stages.length - 1; // Excluding 'approved' as it's the final state
+    return {
+        currentStage: this.approvalStage,
+        completedStages: currentIndex,
+        totalStages: totalStages,
+        percentage: Math.round((currentIndex / totalStages) * 100),
+        isCompleted: this.approvalStage === 'approved',
+        isRejected: this.approvalStage === 'rejected'
+    };
+};
+
+// Pre-save middleware to handle stage transitions
+adminSchema.pre('save', function(next) {
+    if (this.isModified('approvalStage')) {
+        // If moving to 'approved' stage, activate the admin
+        if (this.approvalStage === 'approved') {
+            this.status = true;
+        }
+        
+        // If rejected at any stage, deactivate the admin
+        if (this.approvalStage === 'rejected') {
+            this.status = false;
+        }
+    }
+    next();
+});
+
+// toJSON transformation to exclude sensitive data
+adminSchema.set('toJSON', {
+    transform: function(doc, ret) {
+        delete ret.password;
+        delete ret.fb_password;
+        if (ret.facebookApp) {
+            delete ret.facebookApp.appSecret;
+        }
+        return ret;
+    }
 });
 
 const Admin = mongoose.model("Admins", adminSchema);

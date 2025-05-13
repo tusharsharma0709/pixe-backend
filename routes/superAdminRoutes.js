@@ -13,11 +13,14 @@ router.post('/logout', superAdminAuth, SuperAdminController.logout);
 
 // Admin management
 router.get('/admins', superAdminAuth, SuperAdminController.getAllAdmins);
-router.put('/admins/:adminId/review', superAdminAuth, SuperAdminController.reviewAdmin);
-router.post('/admins/:adminId/assign-whatsapp', superAdminAuth, SuperAdminController.assignWhatsAppNumber);
+router.get('/admins/pending', superAdminAuth, SuperAdminController.getPendingRegistrations);
+router.get('/admins/:adminId', superAdminAuth, SuperAdminController.getAdminDetail);
 
-// WhatsApp number management
-router.get('/whatsapp-numbers', superAdminAuth, SuperAdminController.getAllWhatsAppNumbers);
+// New approval flow endpoints
+router.post('/admins/:adminId/verify-facebook', superAdminAuth, SuperAdminController.verifyFacebookCredentials);
+router.post('/admins/:adminId/create-app', superAdminAuth, SuperAdminController.createFacebookApp);
+router.post('/admins/:adminId/verify-whatsapp', superAdminAuth, SuperAdminController.verifyWhatsAppNumber);
+router.post('/admins/:adminId/reject', superAdminAuth, SuperAdminController.rejectRegistration);
 
 // Dashboard and statistics
 router.get('/dashboard/stats', superAdminAuth, SuperAdminController.getDashboardStats);
@@ -25,5 +28,8 @@ router.get('/dashboard/stats', superAdminAuth, SuperAdminController.getDashboard
 // System settings
 router.get('/settings', superAdminAuth, SuperAdminController.getSystemSettings);
 router.put('/settings', superAdminAuth, SuperAdminController.updateSystemSettings);
+
+// WhatsApp number management (now shows verified WhatsApp numbers from admin registrations)
+router.get('/whatsapp-numbers', superAdminAuth, SuperAdminController.getAllWhatsAppNumbers);
 
 module.exports = router;

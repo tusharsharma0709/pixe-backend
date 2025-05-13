@@ -7,6 +7,7 @@ const { adminAuth } = require('../middlewares/auth');
 // Public routes
 router.post('/register', AdminController.register);
 router.post('/login', AdminController.login);
+router.get('/registration-status', AdminController.getRegistrationStatus); // Added for checking registration status
 
 // Protected routes
 router.post('/logout', adminAuth, AdminController.logout);

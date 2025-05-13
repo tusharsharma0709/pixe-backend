@@ -24,6 +24,12 @@ const activityLogSchema = new mongoose.Schema({
             // Admin management
             'admin_created', 'admin_updated', 'admin_approved', 'admin_rejected', 'admin_deleted',
             
+            // NEW: Registration flow actions
+            'fb_credentials_verified', 'fb_credentials_rejected',
+            'facebook_app_created', 'facebook_app_updated',
+            'whatsapp_verified', 'whatsapp_rejected',
+            'registration_rejected', 'registration_completed',
+            
             // Campaign management
             'campaign_requested', 'campaign_reviewed', 'campaign_approved', 'campaign_rejected',
             'campaign_published', 'campaign_updated', 'campaign_deleted', 'campaign_paused',
@@ -129,9 +135,6 @@ activityLogSchema.index({ entityType: 1, entityId: 1, createdAt: -1 });
 activityLogSchema.index({ adminId: 1, createdAt: -1 });
 activityLogSchema.index({ status: 1, createdAt: -1 });
 activityLogSchema.index({ createdAt: -1 });
-
-// TTL index for automatic deletion of old logs (optional)
-// activityLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 90 }); // 90 days
 
 const ActivityLog = mongoose.model('ActivityLogs', activityLogSchema);
 module.exports = { ActivityLog };

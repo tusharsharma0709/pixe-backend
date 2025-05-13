@@ -13,7 +13,6 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
-const { refreshFacebookToken, verifyFacebookCredentials } = require('../utils/facebookAuth');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -40,7 +39,7 @@ const createNotification = async (data) => {
 };
 
 const AdminController = {
-    // Admin registration
+    // Admin registration with WhatsApp number
     register: async (req, res) => {
         try {
             const {
@@ -51,49 +50,74 @@ const AdminController = {
                 email_id,
                 password,
                 fb_id,
-                fb_password
+                fb_password,
+                whatsapp_number
             } = req.body;
 
             // Validate required fields
-            if (!first_name || !last_name || !mobile || !email_id || !password || !fb_id || !fb_password) {
+            if (!first_name || !last_name || !mobile || !email_id || !password || !fb_id || !fb_password || !whatsapp_number) {
                 return res.status(400).json({
                     success: false,
-                    message: "All required fields must be provided"
+                    message: "All required fields must be provided including WhatsApp number"
+                });
+            }
+
+            // Validate WhatsApp number format
+            const whatsappRegex = /^\+?[1-9]\d{1,14}$/;
+            if (!whatsappRegex.test(whatsapp_number)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid WhatsApp number format. Please include country code."
                 });
             }
 
             // Check if admin already exists
-            const existingAdmin = await Admin.findOne({ email_id });
-            if (existingAdmin) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Admin with this email already exists"
-                });
-            }
+            const existingAdmin = await Admin.findOne({ 
+                $or: [
+                    { email_id: email_id.toLowerCase() },
+                    { mobile },
+                    { requestedWhatsappNumber: whatsapp_number }
+                ]
+            });
 
-            // Check if mobile already exists
-            const existingMobile = await Admin.findOne({ mobile });
-            if (existingMobile) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Admin with this mobile number already exists"
-                });
+            if (existingAdmin) {
+                if (existingAdmin.email_id === email_id.toLowerCase()) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Admin with this email already exists"
+                    });
+                }
+                if (existingAdmin.mobile === mobile) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Admin with this mobile number already exists"
+                    });
+                }
+                if (existingAdmin.requestedWhatsappNumber === whatsapp_number) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "This WhatsApp number is already registered"
+                    });
+                }
             }
 
             // Hash password
             const hashedPassword = await bcrypt.hash(password, 10);
 
-            // Create admin
+            // Create admin with pending status
             const admin = new Admin({
                 first_name,
                 last_name,
                 business_name,
                 mobile,
-                email_id,
+                email_id: email_id.toLowerCase(),
                 password: hashedPassword,
                 fb_id,
                 fb_password, // Note: In production, this should be encrypted
-                status: false // Admin remains inactive until approved by super admin
+                requestedWhatsappNumber: whatsapp_number,
+                status: false,
+                approvalStage: 'pending_review',
+                requiresManualReview: true
             });
 
             await admin.save();
@@ -106,33 +130,46 @@ const AdminController = {
                 action: 'register',
                 entityType: 'Admin',
                 entityId: admin._id,
-                description: `Admin registered: ${admin.email_id}`,
+                description: `Admin registered: ${admin.email_id} with WhatsApp: ${whatsapp_number}`,
                 adminId: admin._id,
                 status: 'success'
             });
 
             // Create notification for super admin
             await createNotification({
-                title: 'New Admin Registration',
-                description: `${admin.first_name} ${admin.last_name} (${admin.business_name}) has registered and needs approval`,
+                title: 'New Admin Registration - Requires Review',
+                description: `${admin.first_name} ${admin.last_name} (${admin.business_name}) has registered with WhatsApp: ${whatsapp_number}. Facebook credentials need verification.`,
                 type: 'admin_registration',
                 forSuperAdmin: true,
                 relatedTo: {
                     model: 'Admin',
                     id: admin._id
                 },
-                priority: 'high'
+                priority: 'high',
+                metadata: {
+                    adminEmail: admin.email_id,
+                    whatsappNumber: whatsapp_number,
+                    stage: 'pending_review'
+                }
             });
 
-            // Remove password from response
+            // Remove sensitive data from response
             const adminResponse = admin.toObject();
             delete adminResponse.password;
             delete adminResponse.fb_password;
 
             return res.status(201).json({
                 success: true,
-                message: "Admin registered successfully. Please wait for super admin approval.",
-                data: adminResponse
+                message: "Registration successful. Your account is under review. You will be notified once approved.",
+                data: {
+                    id: adminResponse._id,
+                    email: adminResponse.email_id,
+                    first_name: adminResponse.first_name,
+                    last_name: adminResponse.last_name,
+                    business_name: adminResponse.business_name,
+                    status: adminResponse.status,
+                    approvalStage: adminResponse.approvalStage
+                }
             });
         } catch (error) {
             console.error("Error in register:", error);
@@ -158,7 +195,7 @@ const AdminController = {
             }
 
             // Find admin by email
-            const admin = await Admin.findOne({ email_id });
+            const admin = await Admin.findOne({ email_id: email_id.toLowerCase() });
             if (!admin) {
                 return res.status(400).json({
                     success: false,
@@ -170,7 +207,11 @@ const AdminController = {
             if (!admin.status) {
                 return res.status(403).json({
                     success: false,
-                    message: "Your account is not approved yet. Please wait for super admin approval."
+                    message: "Your account is not approved yet. Please wait for super admin approval.",
+                    data: {
+                        approvalStage: admin.approvalStage,
+                        rejectionReason: admin.rejectionReason
+                    }
                 });
             }
 
@@ -181,23 +222,6 @@ const AdminController = {
                     success: false,
                     message: "Invalid email or password"
                 });
-            }
-
-            // Check if Facebook access token needs refresh
-            if (admin.facebookAccess && admin.facebookAccess.expiresAt) {
-                const expiryDate = new Date(admin.facebookAccess.expiresAt);
-                const now = new Date();
-                const hoursUntilExpiry = (expiryDate - now) / (1000 * 60 * 60);
-
-                if (hoursUntilExpiry < 24) {
-                    // Refresh token if expiring within 24 hours
-                    const refreshResult = await refreshFacebookToken(admin.facebookAccess.refreshToken);
-                    if (refreshResult.success) {
-                        admin.facebookAccess.accessToken = refreshResult.accessToken;
-                        admin.facebookAccess.expiresAt = refreshResult.expiresAt;
-                        await admin.save();
-                    }
-                }
             }
 
             // Generate JWT token
@@ -252,6 +276,53 @@ const AdminController = {
         }
     },
 
+    // Get registration status
+    getRegistrationStatus: async (req, res) => {
+        try {
+            const email_id = req.query.email;
+
+            if (!email_id) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Email is required"
+                });
+            }
+
+            const admin = await Admin.findOne({ email_id: email_id.toLowerCase() })
+                .select('email_id first_name last_name status approvalStage rejectionReason createdAt reviewedAt fb_credentials_verified facebookApp whatsappVerification');
+
+            if (!admin) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Admin not found"
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    email: admin.email_id,
+                    name: `${admin.first_name} ${admin.last_name}`,
+                    status: admin.status,
+                    approvalStage: admin.approvalStage,
+                    rejectionReason: admin.rejectionReason,
+                    registeredAt: admin.createdAt,
+                    reviewedAt: admin.reviewedAt,
+                    fbCredentialsVerified: admin.fb_credentials_verified,
+                    facebookAppCreated: !!admin.facebookApp,
+                    whatsappVerified: admin.whatsappVerification?.isVerified || false
+                }
+            });
+        } catch (error) {
+            console.error("Error in getRegistrationStatus:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
     // Logout
     logout: async (req, res) => {
         try {
@@ -296,7 +367,7 @@ const AdminController = {
 
             const admin = await Admin.findById(adminId)
                 .select('-password -fb_password')
-                .populate('whatsappNumber.number');
+                .populate('reviewedBy', 'first_name last_name email_id');
 
             if (!admin) {
                 return res.status(404).json({
@@ -409,68 +480,12 @@ const AdminController = {
         }
     },
 
-    // Update Facebook credentials
+    // Update Facebook credentials (not allowed in new flow)
     updateFacebookCredentials: async (req, res) => {
         try {
-            const adminId = req.adminId;
-            const { fb_id, fb_password } = req.body;
-
-            if (!fb_id || !fb_password) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Facebook ID and password are required"
-                });
-            }
-
-            const admin = await Admin.findById(adminId);
-
-            if (!admin) {
-                return res.status(404).json({
-                    success: false,
-                    message: "Admin not found"
-                });
-            }
-
-            // Verify new Facebook credentials
-            const fbVerification = await verifyFacebookCredentials(fb_id, fb_password);
-            
-            if (!fbVerification.success) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Failed to verify Facebook credentials",
-                    error: fbVerification.error
-                });
-            }
-
-            // Update Facebook credentials
-            admin.fb_id = fb_id;
-            admin.fb_password = fb_password; // Note: Should be encrypted in production
-            admin.facebookAccess = {
-                accessToken: fbVerification.accessToken,
-                refreshToken: fbVerification.refreshToken,
-                expiresAt: fbVerification.expiresAt,
-                isVerified: true,
-                lastVerified: new Date()
-            };
-
-            await admin.save();
-
-            // Log activity
-            await logActivity({
-                actorId: adminId,
-                actorModel: 'Admins',
-                actorName: `${admin.first_name} ${admin.last_name}`,
-                action: 'admin_updated',
-                entityType: 'Admin',
-                entityId: admin._id,
-                description: `Facebook credentials updated`,
-                adminId,
-                status: 'success'
-            });
-
-            return res.status(200).json({
-                success: true,
-                message: "Facebook credentials updated successfully"
+            return res.status(403).json({
+                success: false,
+                message: "Facebook credentials cannot be updated after registration. Please contact super admin for assistance."
             });
         } catch (error) {
             console.error("Error in updateFacebookCredentials:", error);
@@ -738,28 +753,28 @@ const AdminController = {
 
             const admin = await Admin.findById(adminId);
             
-            if (!admin || !admin.whatsappNumber) {
+            if (!admin || !admin.whatsappVerification) {
                 return res.status(404).json({
                     success: false,
-                    message: "WhatsApp number not assigned"
-                });
-            }
-
-            const whatsappNumber = await WhatsappNumber.findOne({
-                phoneNumber: admin.whatsappNumber.number,
-                adminId
-            });
-
-            if (!whatsappNumber) {
-                return res.status(404).json({
-                    success: false,
-                    message: "WhatsApp number details not found"
+                    message: "WhatsApp not configured for this account"
                 });
             }
 
             return res.status(200).json({
                 success: true,
-                data: whatsappNumber
+                data: {
+                    requestedNumber: admin.requestedWhatsappNumber,
+                    verifiedNumber: admin.whatsappVerification.phoneNumber,
+                    phoneNumberId: admin.whatsappVerification.phoneNumberId,
+                    businessAccountId: admin.whatsappVerification.businessAccountId,
+                    isVerified: admin.whatsappVerification.isVerified,
+                    verifiedAt: admin.whatsappVerification.verifiedAt,
+                    facebookApp: admin.facebookApp ? {
+                        appName: admin.facebookApp.appName,
+                        appId: admin.facebookApp.appId,
+                        status: admin.facebookApp.status
+                    } : null
+                }
             });
         } catch (error) {
             console.error("Error in getWhatsAppInfo:", error);

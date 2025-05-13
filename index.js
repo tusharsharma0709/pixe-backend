@@ -5,7 +5,7 @@ const app = require('./app');
 
 console.log('Starting server initialization...');
 console.log('MongoDB URI loaded:', !!process.env.MONGODB_URI);
-console.log('PORT:', process.env.PORT || 3000);
+console.log('PORT:', process.env.PORT || 3001);
 
 // Database connection
 const connectDB = async () => {
