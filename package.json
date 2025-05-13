@@ -4,15 +4,7 @@
   "description": "WhatsApp-Facebook Business Integration Platform for lead generation and customer engagement",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
-    "lint": "eslint . --ext .js",
-    "lint:fix": "eslint . --ext .js --fix",
-    "seed": "node scripts/seed.js",
-    "migrate": "node scripts/migrate.js"
+    "start": "node index.js"
   },
   "keywords": [
     "whatsapp",
