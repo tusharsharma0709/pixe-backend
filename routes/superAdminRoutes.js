@@ -1,7 +1,7 @@
 // routes/superAdminRoutes.js
 const express = require('express');
 const router = express.Router();
-const SuperAdminController = require('../controllers/superAdminControllers');
+const SuperAdminController = require('../controllers/superadminControllers');
 const { superAdminAuth } = require('../middlewares/auth');
 
 // Public routes (only for initial setup)
