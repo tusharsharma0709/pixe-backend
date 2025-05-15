@@ -440,36 +440,28 @@ receiveMessage: async (req, res) => {
 
     // Add this new method to MessageController
 // Replace the verifyWebhook method in MessageController.js with this:
+// In MessageController.js
 verifyWebhook: async (req, res) => {
     try {
-        console.log('\n=== Webhook Verification Request ===');
-        console.log('Query params:', req.query);
-        console.log('Headers:', req.headers);
+        // Manual query parsing since req.query is empty
+        const url = req.originalUrl || req.url;
+        const [pathname, queryString] = url.split('?');
         
-        const mode = req.query['hub.mode'];
-        const token = req.query['hub.verify_token'];
-        const challenge = req.query['hub.challenge'];
+        if (!queryString) {
+            return res.status(403).send('Forbidden');
+        }
         
-        console.log('Mode:', mode);
-        console.log('Received Token:', token);
-        console.log('Challenge:', challenge);
-        console.log('Expected Token:', 'my_custom_verify_token');
+        // Parse the query string manually
+        const params = new URLSearchParams(queryString);
+        const mode = params.get('hub.mode');
+        const token = params.get('hub.verify_token');
+        const challenge = params.get('hub.challenge');
         
-        // Check if this is a subscribe event
-        if (mode === 'subscribe') {
-            // Check if the token matches
-            if (token === 'my_custom_verify_token') {
-                console.log('Token matches! Sending challenge back');
-                // Return the challenge value
-                return res.status(200).send(challenge);
-            } else {
-                console.log('Token mismatch!');
-                console.log('Expected: my_custom_verify_token');
-                console.log('Received:', token);
-                return res.status(403).send('Forbidden');
-            }
+        console.log('Manual parse results:', { mode, token, challenge });
+        
+        if (mode === 'subscribe' && token === 'my_custom_verify_token') {
+            return res.send(challenge);
         } else {
-            console.log('Not a subscribe event');
             return res.status(403).send('Forbidden');
         }
     } catch (error) {
