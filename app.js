@@ -65,9 +65,68 @@ app.get('/webhook', (req, res) => {
     }
 });
 
-app.post('/webhook', (req, res) => {
-    console.log('Message received:', req.body);
-    res.sendStatus(200);
+app.post('/webhook', async (req, res) => {
+    try {
+        const { entry } = req.body;
+        
+        if (!entry || !entry[0] || !entry[0].changes) {
+            return res.sendStatus(200);
+        }
+        
+        const changes = entry[0].changes[0];
+        const value = changes.value;
+        
+        if (!value.messages || !value.messages[0]) {
+            return res.sendStatus(200);
+        }
+        
+        const message = value.messages[0];
+        const phoneNumber = message.from;
+        const messageText = message.text?.body;
+        
+        // Import your models
+        const { User } = require('./models/Users');
+        const { UserSession } = require('./models/UserSessions');
+        const { Message } = require('./models/Messages');
+        const { processWorkflowInput } = require('./services/workflowExecutor');
+        
+        // Find user
+        const formattedPhone = `+${phoneNumber}`;
+        const user = await User.findOne({ phone: formattedPhone });
+        
+        if (!user) {
+            console.log('User not found for:', formattedPhone);
+            return res.sendStatus(200);
+        }
+        
+        // Find active session
+        const session = await UserSession.findOne({
+            userId: user._id,
+            status: 'active'
+        }).sort({ createdAt: -1 });
+        
+        if (!session) {
+            console.log('No active session for user');
+            return res.sendStatus(200);
+        }
+        
+        // Save message
+        await Message.create({
+            sessionId: session._id,
+            userId: user._id,
+            sender: 'user',
+            content: messageText,
+            whatsappMessageId: message.id
+        });
+        
+        // Process workflow
+        await processWorkflowInput(session, messageText);
+        
+        res.sendStatus(200);
+    } catch (error) {
+        console.error('Error:', error);
+        res.sendStatus(200);
+    }
 });
 
 // Security middlewares
