@@ -22,6 +22,12 @@ if (!admin.apps.length) {
         storageBucket: process.env.FIREBASE_STORAGE_BUCKET
     });
 }
+const app = express();
+app.set('trust proxy', 1);
+// Add a basic route for the homepage
+app.get('/', (req, res) => {
+    res.send('WhatsApp API Server is running');
+});
 
 // Import routes
 const adminRoutes = require('./routes/adminRoutes');
@@ -48,20 +54,31 @@ const fileUploadRoutes = require('./routes/uploadFileRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const messageRoutes = require('./routes/messageRoutes')
 
-const app = express();
+// Update your webhook verification route
 app.get('/webhook', (req, res) => {
-    console.log('Full URL:', req.url);
+    console.log('Webhook verification request received');
+    console.log('Query params:', req.query);
     
-    const challenge = req.url.match(/hub\.challenge=([^&]*)/)?.[1];
-    const mode = req.url.match(/hub\.mode=([^&]*)/)?.[1];
-    const token = req.url.match(/hub\.verify_token=([^&]*)/)?.[1];
+    // Get parameters from query string
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
     
     console.log({ mode, token, challenge });
     
-    if (mode === 'subscribe' && token === 'my_custom_verify_token' && challenge) {
-        res.send(decodeURIComponent(challenge));
+    // Check if mode and token are correct
+    if (mode && token) {
+        // Your verify token should match what you set in Meta Dashboard
+        if (mode === 'subscribe' && token === 'my_custom_verify_token') {
+            console.log('WEBHOOK_VERIFIED');
+            res.status(200).send(challenge);
+        } else {
+            console.log('Verification failed. Token mismatch.');
+            res.sendStatus(403);
+        }
     } else {
-        res.sendStatus(403);
+        console.log('Missing parameters');
+        res.sendStatus(400);
     }
 });
 
