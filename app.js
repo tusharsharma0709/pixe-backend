@@ -97,6 +97,32 @@ const authLimiter = rateLimit({
     max: 5, // limit each IP to 5 requests per windowMs
     message: 'Too many authentication attempts, please try again later.'
 });
+app.set('query parser', 'extended');
+
+// Webhook verification - PUT THIS AT THE TOP OF YOUR ROUTES
+app.get('/api/whatsapp-webhook', (req, res) => {
+    // Manual query parsing because req.query is broken
+    const urlParts = req.url.split('?');
+    const queryString = urlParts[1] || '';
+    const params = new URLSearchParams(queryString);
+    
+    const mode = params.get('hub.mode');
+    const token = params.get('hub.verify_token');
+    const challenge = params.get('hub.challenge');
+    
+    if (mode === 'subscribe' && token === 'my_custom_verify_token') {
+        res.send(challenge);
+    } else {
+        res.sendStatus(403);
+    }
+});
+
+// Webhook for receiving messages
+app.post('/api/whatsapp-webhook', express.raw({ type: 'application/json' }), (req, res) => {
+    // Handle incoming messages here
+    console.log('Webhook received:', req.body);
+    res.sendStatus(200);
+});
 
 app.use('/api/admin/login', authLimiter);
 app.use('/api/admin/register', authLimiter);
