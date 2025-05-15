@@ -439,37 +439,42 @@ receiveMessage: async (req, res) => {
 },
 
     // Add this new method to MessageController
+// Replace the verifyWebhook method in MessageController.js with this:
 verifyWebhook: async (req, res) => {
     try {
+        console.log('\n=== Webhook Verification Request ===');
+        console.log('Query params:', req.query);
+        console.log('Headers:', req.headers);
+        
         const mode = req.query['hub.mode'];
         const token = req.query['hub.verify_token'];
         const challenge = req.query['hub.challenge'];
         
-        console.log('Webhook verification request received');
         console.log('Mode:', mode);
-        console.log('Token:', token);
+        console.log('Received Token:', token);
         console.log('Challenge:', challenge);
-        console.log('Expected token:', process.env.WHATSAPP_WEBHOOK_TOKEN || 'my_custom_verify_token');
+        console.log('Expected Token:', 'my_custom_verify_token');
         
-        // Check if mode and token are correct
-        if (mode && token) {
-            // Check the mode and token sent are correct
-            if (mode === 'subscribe' && token === (process.env.WHATSAPP_WEBHOOK_TOKEN || 'my_custom_verify_token')) {
-                // Respond with the challenge token from the request
-                console.log('Webhook verified successfully');
-                res.status(200).send(challenge);
+        // Check if this is a subscribe event
+        if (mode === 'subscribe') {
+            // Check if the token matches
+            if (token === 'my_custom_verify_token') {
+                console.log('Token matches! Sending challenge back');
+                // Return the challenge value
+                return res.status(200).send(challenge);
             } else {
-                // Respond with '403 Forbidden' if verify tokens do not match
-                console.log('Webhook verification failed - token mismatch');
-                res.sendStatus(403);
+                console.log('Token mismatch!');
+                console.log('Expected: my_custom_verify_token');
+                console.log('Received:', token);
+                return res.status(403).send('Forbidden');
             }
         } else {
-            console.log('Webhook verification failed - missing parameters');
-            res.sendStatus(403);
+            console.log('Not a subscribe event');
+            return res.status(403).send('Forbidden');
         }
     } catch (error) {
         console.error('Error in webhook verification:', error);
-        res.sendStatus(500);
+        return res.status(500).send('Server Error');
     }
 },
 
