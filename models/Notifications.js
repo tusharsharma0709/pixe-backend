@@ -57,12 +57,12 @@ const notificationSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
-    adminId: {  // CHANGED: Standardized naming convention
+    adminId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Admins',
         default: null
     },
-    agentId: {  // CHANGED: Standardized naming convention
+    agentId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Agents',
         default: null
@@ -70,7 +70,7 @@ const notificationSchema = new mongoose.Schema({
     relatedTo: {
         model: {
             type: String,
-            enum: ['Admin', 'Campaign', 'Product', 'User', 'Workflow', 'Agent'],
+            enum: ['Admin', 'Campaign', 'CampaignRequest', 'Product', 'ProductRequest', 'User', 'Workflow', 'Agent'], // Added 'ProductRequest'
             default: null
         },
         id: {

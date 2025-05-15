@@ -13,21 +13,22 @@ const workflowNodeSchema = new mongoose.Schema({
     type: {
         type: String,
         enum: [
-            'message',                 // Simple message node
-            'input',                   // Input collection node
-            'condition',               // Conditional logic node
-            'api',                     // External API call node
-            'surepass',                // SurePass API integration node
-            'bank_verification',       // Bank account verification node
-            'credit_check',            // Credit bureau check node
-            'loan_offer',              // Loan offer display node
-            'payment_link',            // Payment link generation node
-            'document_generate',       // Document generation node
-            'tally_integration',       // Tally integration node
-            'gst_billing',             // GST billing node
-            'shipment',                // Shipment tracking node
-            'make_webhook',            // Make.com webhook node
-            'video_kyc'                // Video KYC node
+            'message',
+            'input',
+            'condition',
+            'api',
+            'surepass',
+            'bank_verification',
+            'credit_check',
+            'loan_offer',
+            'payment_link',
+            'document_generate',
+            'tally_integration',
+            'gst_billing',
+            'shipment',
+            'make_webhook',
+            'video_kyc',
+            'end'  // ADD THIS LINE
         ],
         required: true
     },

@@ -189,6 +189,11 @@ const UserSessionController = {
                 actionUrl: `/sessions/${userSession._id}`
             });
 
+            // ADD THIS SECTION - Execute the first workflow node
+            // Import the workflow execution function from MessageController
+            const { executeWorkflowNode } = require('../services/workflowExecutor');
+            await executeWorkflowNode(userSession, workflow.startNodeId);
+
             return res.status(201).json({
                 success: true,
                 message: "User session created successfully",

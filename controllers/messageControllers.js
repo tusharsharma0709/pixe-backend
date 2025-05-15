@@ -11,6 +11,7 @@ const { Notification } = require('../models/Notifications');
 const { FileUpload } = require('../models/FileUploads');
 const axios = require('axios');
 const mongoose = require('mongoose');
+const { processWorkflowInput } = require('../services/workflowExecutor');
 const ObjectId = mongoose.Types.ObjectId;
 
 // Helper function to log activity
@@ -413,9 +414,11 @@ const MessageController = {
                 });
             }
 
-            // Process workflow if applicable
-            // This would trigger workflow processing based on the message content
-            // TODO: Implement workflow processing logic
+            // ADD THIS SECTION - Process workflow if applicable
+            if (session.workflowId && session.currentNodeId) {
+                const processedContent = whatsappMessage.text?.body || whatsappMessage.caption || '';
+                await processWorkflowInput(session, processedContent);
+            }
 
             return res.status(201).json({
                 success: true,

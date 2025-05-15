@@ -37,7 +37,7 @@ const createProductRequest = async (req, res) => {
         }
         
         // Check if admin has verified Facebook credentials
-        if (!admin.facebookAccess || !admin.facebookAccess.isVerified) {
+        if (!admin.fb_credentials_verified) {
             return res.status(400).json({
                 success: false,
                 message: "You need to verify your Facebook credentials before creating product requests"
@@ -45,7 +45,7 @@ const createProductRequest = async (req, res) => {
         }
         
         // Extract data from request
-        const { 
+        let { 
             name, 
             description, 
             price, 
@@ -65,6 +65,25 @@ const createProductRequest = async (req, res) => {
             taxClass,
             taxRate
         } = req.body;
+        
+        // Parse JSON strings if coming from form-data
+        try {
+            if (typeof attributes === 'string') {
+                attributes = JSON.parse(attributes);
+            }
+            if (typeof inventory === 'string') {
+                inventory = JSON.parse(inventory);
+            }
+            if (typeof shipping === 'string') {
+                shipping = JSON.parse(shipping);
+            }
+        } catch (parseError) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid JSON format in request data",
+                error: parseError.message
+            });
+        }
         
         // Validate required fields
         if (!name || !price) {
@@ -97,11 +116,15 @@ const createProductRequest = async (req, res) => {
         let productImages = [];
         if (req.files && Array.isArray(req.files)) {
             for (const file of req.files) {
+                // Ensure we have both path and URL
+                const filePath = file.path || file.location || `/uploads/${file.filename}`;
+                const fileUrl = file.location || file.path || `/uploads/${file.filename}`;
+                
                 const fileUpload = new FileUpload({
                     filename: file.filename || `product_image_${Date.now()}`,
                     originalFilename: file.originalname,
-                    path: file.path || file.location,
-                    url: file.location || file.path,
+                    path: filePath,
+                    url: fileUrl,
                     mimeType: file.mimetype,
                     size: file.size,
                     uploadedBy: {
@@ -109,7 +132,7 @@ const createProductRequest = async (req, res) => {
                         role: 'admin'
                     },
                     adminId,
-                    entityType: 'product_request',
+                    entityType: 'product', // Changed from 'product_request' to 'product'
                     isPublic: true
                 });
                 
@@ -158,7 +181,8 @@ const createProductRequest = async (req, res) => {
             entityType: 'ProductRequest',
             entityId: productRequest._id,
             description: `Product request "${name}" was submitted by admin`,
-            status: 'success'
+            status: 'success',
+            adminId: adminId
         });
         
         // Create notification for Super Admins

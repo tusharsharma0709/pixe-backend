@@ -46,96 +46,164 @@ const generateOTP = () => {
     return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
+// services/whatsappService.js
+const axios = require('axios');
+
+const sendOTP = async (phoneNumber, otp) => {
+    try {
+        // Format phone number (ensure it has country code)
+        const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
+        
+        // WhatsApp Business API endpoint
+        const url = `https://graph.facebook.com/v22.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+        
+        // Message payload for otp_template
+        const payload = {
+            messaging_product: "whatsapp",
+            to: formattedPhone.replace('+', ''), // WhatsApp API expects number without +
+            type: "template",
+            template: {
+                name: "otp_template",
+                language: {
+                    code: "en_US"
+                },
+                components: [
+                    {
+                        type: "body",
+                        parameters: [
+                            {
+                                type: "text",
+                                text: otp  // Only one parameter for the body
+                            }
+                        ]
+                    },
+                    {
+                        type: "button",
+                        sub_type: "url",
+                        index: "0",
+                        parameters: [
+                            {
+                                type: "text",
+                                text: otp // Parameter for the URL button
+                            }
+                        ]
+                    }
+                ]
+            }
+        };
+
+        // Send message via WhatsApp API
+        const response = await axios.post(url, payload, {
+            headers: {
+                'Authorization': `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        console.log('OTP sent via WhatsApp:', response.data);
+        return response.data;
+    } catch (error) {
+        console.error('Error sending OTP via WhatsApp:', error.response?.data || error);
+        throw error;
+    }
+};
+
 const UserController = {
+
     // User registration/login via phone
-    registerOrLogin: async (req, res) => {
-        try {
-            const { phone, campaignId, workflowId, productId, source } = req.body;
+registerOrLogin: async (req, res) => {
+    try {
+        const { phone,source } = req.body;
 
-            // Validate required fields
-            if (!phone) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Phone number is required"
-                });
-            }
-
-            // Find or create user
-            let user = await User.findOne({ phone });
-            
-            if (!user) {
-                // Get admin and workflow information if campaign ID is provided
-                let adminId = null;
-                if (campaignId) {
-                    const campaign = await Campaign.findById(campaignId);
-                    if (campaign) {
-                        adminId = campaign.adminId;
-                    }
-                } else if (workflowId) {
-                    const workflow = await Workflow.findById(workflowId);
-                    if (workflow) {
-                        adminId = workflow.adminId;
-                    }
-                }
-
-                // Create new user
-                user = new User({
-                    phone,
-                    campaignId,
-                    workflowId,
-                    productId,
-                    adminId,
-                    source: source || 'whatsapp',
-                    status: 'new'
-                });
-                await user.save();
-
-                // Log activity
-                await logActivity({
-                    actorId: user._id,
-                    actorModel: 'Users',
-                    actorName: user.phone,
-                    action: 'register',
-                    entityType: 'User',
-                    entityId: user._id,
-                    description: `User registered with phone: ${user.phone}`,
-                    adminId: user.adminId
-                });
-            }
-
-            // Generate OTP
-            const otp = generateOTP();
-            const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
-
-            // Update user with OTP
-            user.otp = otp;
-            user.otpExpiresAt = otpExpiresAt;
-            user.isOtpVerified = false;
-            await user.save();
-
-            // TODO: Send OTP via SMS service
-            // await smsService.sendOTP(phone, otp);
-
-            return res.status(200).json({
-                success: true,
-                message: "OTP sent successfully",
-                data: {
-                    userId: user._id,
-                    phone: user.phone,
-                    // Remove this in production - only for testing
-                    otp: process.env.NODE_ENV === 'development' ? otp : undefined
-                }
-            });
-        } catch (error) {
-            console.error("Error in registerOrLogin:", error);
-            return res.status(500).json({
+        // Validate required fields
+        if (!phone) {
+            return res.status(400).json({
                 success: false,
-                message: "Internal server error",
-                error: error.message
+                message: "Phone number is required"
             });
         }
-    },
 
+        // Find or create user
+        let user = await User.findOne({ phone });
+        
+        if (!user) {
+            // Get admin and workflow information if campaign ID is provided
+            // let adminId = null;
+            // if (campaignId) {
+            //     const campaign = await Campaign.findById(campaignId);
+            //     if (campaign) {
+            //         adminId = campaign.adminId;
+            //     }
+            // } else if (workflowId) {
+            //     const workflow = await Workflow.findById(workflowId);
+            //     if (workflow) {
+            //         adminId = workflow.adminId;
+            //     }
+            // }
+
+            // Create new user
+            user = new User({
+                phone,
+                // campaignId,
+                // workflowId,
+                // productId,
+                // adminId,
+                source: source || 'whatsapp',
+                status: 'new'
+            });
+            await user.save();
+
+            // Log activity
+            await logActivity({
+                actorId: user._id,
+                actorModel: 'Users',
+                actorName: user.phone,
+                action: 'register',
+                entityType: 'User',
+                entityId: user._id,
+                description: `User registered with phone: ${user.phone}`,
+                // adminId: user.adminId
+            });
+        }
+
+        // Generate OTP
+        const otp = generateOTP();
+        const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+
+        // Update user with OTP
+        user.otp = otp;
+        user.otpExpiresAt = otpExpiresAt;
+        user.isOtpVerified = false;
+        await user.save();
+
+        // Send OTP via WhatsApp
+        try {
+            await sendOTP(phone, otp);
+        } catch (whatsappError) {
+            console.error('WhatsApp OTP sending failed:', whatsappError);
+            // You might want to handle this error differently
+            // For now, we'll continue but log the error
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "OTP sent successfully via WhatsApp",
+            data: {
+                userId: user._id,
+                phone: user.phone,
+                // Remove this in production - only for testing
+                otp: process.env.NODE_ENV === 'development' ? otp : undefined
+            }
+        });
+    } catch (error) {
+        console.error("Error in registerOrLogin:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error",
+            error: error.message
+        });
+    }
+},
     // Verify OTP
     verifyOTP: async (req, res) => {
         try {

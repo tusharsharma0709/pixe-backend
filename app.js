@@ -46,6 +46,7 @@ const statisticsRoutes = require('./routes/statisticsRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const fileUploadRoutes = require('./routes/uploadFileRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
+const messageRoutes = require('./routes/messageRoutes')
 
 const app = express();
 
@@ -136,6 +137,7 @@ app.use('/api/statistics', statisticsRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/files', fileUploadRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/message', messageRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

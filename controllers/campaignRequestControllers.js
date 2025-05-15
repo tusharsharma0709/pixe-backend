@@ -37,7 +37,7 @@ const createCampaignRequest = async (req, res) => {
         }
         
         // Check if admin has verified Facebook credentials
-        if (!admin.facebookAccess || !admin.facebookAccess.isVerified) {
+        if (!admin.fb_credentials_verified) {
             return res.status(400).json({
                 success: false,
                 message: "You need to verify your Facebook credentials before creating campaigns"
@@ -45,7 +45,7 @@ const createCampaignRequest = async (req, res) => {
         }
         
         // Extract data from request
-        const { 
+        let { 
             name, 
             description, 
             objective, 
@@ -60,11 +60,38 @@ const createCampaignRequest = async (req, res) => {
             adminNotes
         } = req.body;
         
+        // Parse JSON strings if coming from form-data
+        try {
+            if (typeof targeting === 'string') {
+                targeting = JSON.parse(targeting);
+            }
+            if (typeof budgetSchedule === 'string') {
+                budgetSchedule = JSON.parse(budgetSchedule);
+            }
+            if (typeof creatives === 'string') {
+                creatives = JSON.parse(creatives);
+            }
+        } catch (parseError) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid JSON format in request data",
+                error: parseError.message
+            });
+        }
+        
         // Validate required fields
         if (!name || !objective || !adType || !budgetSchedule || !creatives) {
             return res.status(400).json({
                 success: false,
                 message: "Missing required fields"
+            });
+        }
+        
+        // Validate that creatives is an array
+        if (!Array.isArray(creatives)) {
+            return res.status(400).json({
+                success: false,
+                message: "Creatives must be an array"
             });
         }
         
@@ -423,7 +450,7 @@ const reviewCampaignRequest = async (req, res) => {
             title: `Campaign Request ${status === 'approved' ? 'Approved' : status === 'rejected' ? 'Rejected' : 'Under Review'}`,
             description: `Your campaign request "${campaignRequest.name}" has been ${status === 'approved' ? 'approved' : status === 'rejected' ? 'rejected' : 'placed under review'}`,
             type: 'campaign_request',
-            forAdmin: campaignRequest.adminId,
+            adminId: campaignRequest.adminId, // Changed from forAdmin
             relatedTo: {
                 model: 'CampaignRequest',
                 id: campaignRequest._id
@@ -431,20 +458,31 @@ const reviewCampaignRequest = async (req, res) => {
             priority: 'high'
         });
         
+        // Map status to existing action enum values
+        let action;
+        if (status === 'approved') {
+            action = 'campaign_approved';
+        } else if (status === 'rejected') {
+            action = 'campaign_rejected';
+        } else {
+            action = 'campaign_reviewed'; // Use existing 'campaign_reviewed' for under_review status
+        }
+        
         // Log activity
         await ActivityLog.create({
             actorId: superAdminId,
             actorModel: 'SuperAdmins',
-            action: `campaign_request_${status}`,
+            action: action,
             entityType: 'CampaignRequest',
             entityId: campaignRequest._id,
-            description: `Campaign request "${campaignRequest.name}" was ${status} by super admin`,
-            status: 'success'
+            description: `Campaign request "${campaignRequest.name}" was ${status === 'under_review' ? 'placed under review' : status} by super admin`,
+            status: 'success',
+            adminId: campaignRequest.adminId
         });
         
         res.status(200).json({
             success: true,
-            message: `Campaign request ${status} successfully`,
+            message: `Campaign request ${status === 'under_review' ? 'placed under review' : status} successfully`,
             data: {
                 _id: campaignRequest._id,
                 name: campaignRequest.name,

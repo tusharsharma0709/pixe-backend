@@ -6,8 +6,96 @@ const { UserSession } = require('../models/UserSessions');
 const { ActivityLog } = require('../models/ActivityLogs');
 const { Notification } = require('../models/Notifications');
 const { Message } = require('../models/Messages');
+const axios=require('axios')
 const mongoose = require('mongoose');
+const { User } = require('../models/Users');
 const ObjectId = mongoose.Types.ObjectId;
+const whatsappService = require('../services/whatsappServices')
+// Create a message queue service
+class MessageQueue {
+    constructor() {
+        this.queue = [];
+        this.processing = false;
+        this.delay = 3000; // 3 seconds between messages
+    }
+    
+    async add(phoneNumber, message) {
+        this.queue.push({ phoneNumber, message, attempts: 0 });
+        if (!this.processing) {
+            this.process();
+        }
+    }
+    
+    async process() {
+        this.processing = true;
+        
+        while (this.queue.length > 0) {
+            const item = this.queue.shift();
+            
+            try {
+                await whatsappService.sendMessage(item.phoneNumber, item.message);
+                await new Promise(resolve => setTimeout(resolve, this.delay));
+            } catch (error) {
+                if (error.message.includes('131056') && item.attempts < 3) {
+                    console.log('Rate limit hit, requeueing with longer delay...');
+                    item.attempts++;
+                    this.queue.unshift(item); // Put back at front
+                    await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
+                } else {
+                    console.error('Failed to send message:', error);
+                }
+            }
+        }
+        
+        this.processing = false;
+    }
+}
+
+const messageQueue = new MessageQueue();
+
+// helpers/workflowHelpers.js
+function evaluateCondition(condition, data) {
+    try {
+        if (!condition) return false;
+        
+        // Simple evaluation - you can make this more sophisticated
+        // Example condition: "creditScore > 700"
+        const conditionRegex = /(\w+)\s*(>|<|==|!=|>=|<=)\s*(.+)/;
+        const match = condition.match(conditionRegex);
+        
+        if (!match) return false;
+        
+        const [, field, operator, value] = match;
+        const fieldValue = data[field];
+        
+        if (fieldValue === undefined) return false;
+        
+        // Convert to numbers if possible
+        const numFieldValue = Number(fieldValue);
+        const numValue = Number(value);
+        const useNumbers = !isNaN(numFieldValue) && !isNaN(numValue);
+        
+        switch (operator) {
+            case '>':
+                return useNumbers ? numFieldValue > numValue : fieldValue > value;
+            case '<':
+                return useNumbers ? numFieldValue < numValue : fieldValue < value;
+            case '>=':
+                return useNumbers ? numFieldValue >= numValue : fieldValue >= value;
+            case '<=':
+                return useNumbers ? numFieldValue <= numValue : fieldValue <= value;
+            case '==':
+                return fieldValue == value;
+            case '!=':
+                return fieldValue != value;
+            default:
+                return false;
+        }
+    } catch (error) {
+        console.error('Error evaluating condition:', error);
+        return false;
+    }
+}
 
 // Helper function to log activity
 const logActivity = async (data) => {
@@ -150,7 +238,7 @@ const WorkflowController = {
             return res.status(500).json({
                 success: false,
                 message: "Internal server error",
-                error: error.message
+                error: error
             });
         }
     },
@@ -675,17 +763,24 @@ const WorkflowController = {
     testWorkflow: async (req, res) => {
         try {
             const { id } = req.params;
-            const { testData } = req.body;
-
+            const { testData, phoneNumber, sendMessages = false, interactiveMode = false } = req.body;
+    
+            if (!phoneNumber) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Phone number is required for testing"
+                });
+            }
+    
             const workflow = await Workflow.findById(id);
-
+    
             if (!workflow) {
                 return res.status(404).json({
                     success: false,
                     message: "Workflow not found"
                 });
             }
-
+    
             // Check permissions
             if (workflow.adminId.toString() !== req.adminId) {
                 return res.status(403).json({
@@ -693,14 +788,86 @@ const WorkflowController = {
                     message: "You don't have permission to test this workflow"
                 });
             }
-
-            // Simple workflow test simulation
+    
+            // Interactive mode - create real session for conversation flow
+            if (interactiveMode && sendMessages) {
+                // Import required models
+                const { User } = require('../models/Users');
+                const { UserSession } = require('../models/UserSessions');
+                
+                // Find or create user
+                let user = await User.findOne({ phone: phoneNumber });
+                if (!user) {
+                    user = new User({
+                        phone: phoneNumber,
+                        adminId: workflow.adminId,
+                        workflowId: workflow._id,
+                        status: 'active',
+                        source: 'whatsapp'  // Changed to valid source
+                    });
+                    await user.save();
+                }
+    
+                // Check if there's already an active session
+                let existingSession = await UserSession.findOne({
+                    userId: user._id,
+                    status: 'active',
+                    workflowId: workflow._id
+                });
+    
+                if (existingSession) {
+                    return res.status(200).json({
+                        success: true,
+                        message: "Active session already exists",
+                        data: {
+                            sessionId: existingSession._id,
+                            userId: user._id,
+                            currentNodeId: existingSession.currentNodeId,
+                            instructions: "Use webhook endpoint to send user messages"
+                        }
+                    });
+                }
+    
+                // Create new session
+                const session = new UserSession({
+                    userId: user._id,
+                    phone: phoneNumber,
+                    workflowId: workflow._id,
+                    adminId: workflow.adminId,
+                    currentNodeId: workflow.startNodeId,
+                    data: testData || {},
+                    status: 'active',
+                    source: 'whatsapp'
+                });
+                await session.save();
+    
+                // Execute the workflow
+                const { executeWorkflowNode } = require('../services/workflowExecutor');
+                await executeWorkflowNode(session, workflow.startNodeId);
+    
+                return res.status(200).json({
+                    success: true,
+                    message: "Interactive workflow test started",
+                    data: {
+                        sessionId: session._id,
+                        userId: user._id,
+                        currentNodeId: session.currentNodeId,
+                        webhook: "/api/message/webhook/receive",
+                        instructions: "Messages have been sent to WhatsApp. Send user responses to the webhook endpoint."
+                    }
+                });
+            }
+    
+            // Non-interactive mode - simulate full workflow
             const testResults = [];
             let currentNodeId = workflow.startNodeId;
             let testSession = { data: testData || {} };
             let stepCount = 0;
-            const maxSteps = 100; // Prevent infinite loops
-
+            const maxSteps = 100;
+            let messagesSent = 0;
+            const maxMessagesPerMinute = 10;
+            const messageStartTime = Date.now();
+    
             while (currentNodeId && stepCount < maxSteps) {
                 const currentNode = workflow.nodes.find(node => node.nodeId === currentNodeId);
                 
@@ -712,7 +879,7 @@ const WorkflowController = {
                     });
                     break;
                 }
-
+    
                 const result = {
                     step: stepCount,
                     nodeId: currentNodeId,
@@ -720,57 +887,170 @@ const WorkflowController = {
                     nodeType: currentNode.type,
                     data: { ...testSession.data }
                 };
-
-                // Simulate node execution
+    
+                // Execute node based on type
                 switch (currentNode.type) {
                     case 'message':
                         result.output = currentNode.content;
+                        
+                        // Send actual WhatsApp message with rate limiting
+                        if (sendMessages && currentNode.content) {
+                            try {
+                                // Check rate limits
+                                const elapsedMinutes = (Date.now() - messageStartTime) / 60000;
+                                if (messagesSent >= maxMessagesPerMinute && elapsedMinutes < 1) {
+                                    const waitTime = (1 - elapsedMinutes) * 60000;
+                                    console.log(`Rate limit approaching, waiting ${Math.ceil(waitTime/1000)} seconds...`);
+                                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                                }
+    
+                                // Replace variables in message content
+                                let messageContent = currentNode.content;
+                                for (const [key, value] of Object.entries(testSession.data)) {
+                                    messageContent = messageContent.replace(new RegExp(`{{${key}}}`, 'g'), value);
+                                }
+                                
+                                // Send message via WhatsApp
+                                const messageResult = await whatsappService.sendMessage(
+                                    phoneNumber, 
+                                    messageContent
+                                );
+                                
+                                result.messageSent = true;
+                                result.messageId = messageResult.message_id;
+                                result.actualMessage = messageContent;
+                                messagesSent++;
+                                
+                                // Wait between messages to avoid rate limits
+                                await new Promise(resolve => setTimeout(resolve, 3000)); // 3 second delay
+                                
+                            } catch (sendError) {
+                                console.error('Error sending message:', sendError);
+                                result.messageSent = false;
+                                result.sendError = sendError.response?.data?.error?.message || sendError.message;
+                                
+                                // If rate limit error, wait longer
+                                if (sendError.message?.includes('131056')) {
+                                    console.log('Rate limit hit, waiting 30 seconds...');
+                                    await new Promise(resolve => setTimeout(resolve, 30000));
+                                }
+                            }
+                        } else {
+                            result.messageSent = false;
+                            result.reason = sendMessages ? "No content to send" : "Message sending disabled";
+                        }
+                        
                         currentNodeId = currentNode.nextNodeId;
                         break;
-
+    
                     case 'input':
                         result.output = `Waiting for input: ${currentNode.variableName}`;
+                        
+                        // Send input prompt message if content exists
+                        if (sendMessages && currentNode.content) {
+                            try {
+                                // Rate limit check
+                                if (messagesSent >= maxMessagesPerMinute) {
+                                    await new Promise(resolve => setTimeout(resolve, 60000));
+                                    messagesSent = 0;
+                                }
+    
+                                const messageResult = await whatsappService.sendMessage(
+                                    phoneNumber, 
+                                    currentNode.content
+                                );
+                                result.promptSent = true;
+                                result.messageId = messageResult.message_id;
+                                messagesSent++;
+                                
+                                await new Promise(resolve => setTimeout(resolve, 3000));
+                            } catch (sendError) {
+                                result.promptSent = false;
+                                result.sendError = sendError.response?.data?.error?.message || sendError.message;
+                            }
+                        }
+                        
+                        // For testing, use provided test data
                         if (testData && testData[currentNode.variableName]) {
                             testSession.data[currentNode.variableName] = testData[currentNode.variableName];
                             result.collectedData = { [currentNode.variableName]: testData[currentNode.variableName] };
+                        } else {
+                            result.output += " (No test data provided, skipping)";
                         }
+                        
                         currentNodeId = currentNode.nextNodeId;
                         break;
-
+    
                     case 'condition':
-                        // Simple condition evaluation for testing
-                        const conditionResult = testSession.data[currentNode.variableName] === testData[currentNode.variableName];
+                        // Evaluate condition
+                        const conditionResult = evaluateCondition(
+                            currentNode.condition, 
+                            testSession.data
+                        );
                         result.conditionResult = conditionResult;
+                        result.evaluatedCondition = currentNode.condition;
                         currentNodeId = conditionResult ? currentNode.trueNodeId : currentNode.falseNodeId;
                         break;
-
+    
                     case 'api':
                         result.output = `API call to: ${currentNode.apiEndpoint}`;
+                        
+                        // Make actual API call if enabled and endpoint exists
+                        if (sendMessages && currentNode.apiEndpoint) {
+                            try {
+                                const axios = require('axios');
+                                const apiResponse = await axios({
+                                    method: currentNode.apiMethod || 'GET',
+                                    url: currentNode.apiEndpoint,
+                                    data: currentNode.apiParams || {},
+                                    timeout: 10000
+                                });
+                                result.apiResponse = apiResponse.data;
+                                result.apiStatus = apiResponse.status;
+                            } catch (apiError) {
+                                result.apiError = apiError.message;
+                                result.apiStatus = apiError.response?.status;
+                            }
+                        }
+                        
                         currentNodeId = currentNode.nextNodeId;
                         break;
-
+    
                     default:
+                        result.output = `Node type: ${currentNode.type}`;
                         currentNodeId = currentNode.nextNodeId;
                 }
-
+    
                 testResults.push(result);
                 stepCount++;
-
+    
                 // End node or no next node
                 if (!currentNodeId || currentNode.type === 'end') {
                     break;
                 }
+    
+                // Safety check for self-referencing nodes
+                if (currentNodeId === currentNode.nodeId) {
+                    result.warning = "Self-referencing node detected, stopping execution";
+                    break;
+                }
             }
-
+    
             return res.status(200).json({
                 success: true,
                 message: "Workflow test completed",
                 data: {
                     workflowId: workflow._id,
                     workflowName: workflow.name,
+                    phoneNumber: phoneNumber,
+                    messagesEnabled: sendMessages,
+                    mode: interactiveMode ? "interactive" : "simulation",
                     testResults,
                     finalData: testSession.data,
-                    stepsExecuted: stepCount
+                    stepsExecuted: stepCount,
+                    messagesSent: messagesSent,
+                    warnings: messagesSent >= maxMessagesPerMinute ? 
+                        "Rate limit approached during testing. Some messages may have been delayed." : null
                 }
             });
         } catch (error) {
@@ -782,6 +1062,46 @@ const WorkflowController = {
             });
         }
     },
+    
+    // Helper function for condition evaluation
+    // evaluateCondition: function(condition, data) {
+    //     try {
+    //         // Handle length checks
+    //         const lengthRegex = /(\w+)\.length\s*(>|<|>=|<=)\s*(\d+)/;
+    //         const lengthMatch = condition.match(lengthRegex);
+            
+    //         if (lengthMatch) {
+    //             const [, field, operator, value] = lengthMatch;
+    //             const fieldValue = data[field];
+    //             if (!fieldValue) return false;
+                
+    //             const length = fieldValue.length;
+    //             const compareValue = parseInt(value);
+                
+    //             switch (operator) {
+    //                 case '>': return length > compareValue;
+    //                 case '<': return length < compareValue;
+    //                 case '>=': return length >= compareValue;
+    //                 case '<=': return length <= compareValue;
+    //             }
+    //         }
+            
+    //         // Handle includes checks
+    //         const includesRegex = /(\w+)\.includes\(['"](.+)['"]\)/;
+    //         const includesMatch = condition.match(includesRegex);
+            
+    //         if (includesMatch) {
+    //             const [, field, searchValue] = includesMatch;
+    //             const fieldValue = data[field];
+    //             return fieldValue && fieldValue.includes(searchValue);
+    //         }
+            
+    //         return false;
+    //     } catch (error) {
+    //         console.error('Error evaluating condition:', error);
+    //         return false;
+    //     }
+    // },
 
     // Get workflow analytics
     getWorkflowAnalytics: async (req, res) => {
