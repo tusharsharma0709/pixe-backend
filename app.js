@@ -67,67 +67,131 @@ app.get('/webhook', (req, res) => {
 
 app.post('/webhook', async (req, res) => {
     try {
+        console.log('🔔 WEBHOOK RECEIVED:', JSON.stringify(req.body, null, 2));
+        
+        // WhatsApp sends data in this specific format
         const { entry } = req.body;
         
         if (!entry || !entry[0] || !entry[0].changes) {
+            console.log('No changes in webhook, returning 200');
             return res.sendStatus(200);
         }
         
         const changes = entry[0].changes[0];
         const value = changes.value;
         
-        if (!value.messages || !value.messages[0]) {
-            return res.sendStatus(200);
+        // Handle different types of webhooks (messages, statuses, etc.)
+        if (value.messages && value.messages[0]) {
+            // Handle incoming message
+            const message = value.messages[0];
+            const phoneNumber = message.from; // Format: 919302239283 (without +)
+            const messageText = message.text?.body;
+            const messageId = message.id;
+            const messageType = message.type;
+            
+            console.log('⬇️ INCOMING MESSAGE:');
+            console.log('  From:', phoneNumber);
+            console.log('  Text:', messageText);
+            console.log('  ID:', messageId);
+            console.log('  Type:', messageType);
+            
+            // Format phone number for database lookup
+            const formattedPhone = `+${phoneNumber}`;
+            
+            // Import models
+            const { User } = require('./models/Users');
+            const { UserSession } = require('./models/UserSessions');
+            const { Message } = require('./models/Messages');
+            const { processWorkflowInput } = require('./services/workflowExecutor');
+            
+            // Find user by phone number
+            const user = await User.findOne({ phone: formattedPhone });
+            
+            if (!user) {
+                console.log('❌ User not found for phone:', formattedPhone);
+                return res.sendStatus(200);
+            }
+            
+            // Find active session
+            const session = await UserSession.findOne({
+                userId: user._id,
+                status: 'active'
+            }).sort({ createdAt: -1 });
+            
+            if (!session) {
+                console.log('❌ No active session found for user:', user._id);
+                return res.sendStatus(200);
+            }
+            
+            console.log('✅ Found session:', session._id);
+            console.log('  Current node:', session.currentNodeId);
+            
+            // Create message record
+            const newMessage = new Message({
+                sessionId: session._id,
+                userId: user._id,
+                agentId: session.agentId,
+                adminId: session.adminId,
+                campaignId: session.campaignId,
+                sender: 'user',
+                messageType: messageType || 'text',
+                content: messageText,
+                status: 'delivered',
+                whatsappMessageId: messageId
+            });
+            
+            await newMessage.save();
+            console.log('✅ Message saved to database');
+            
+            // Update session activity
+            session.lastInteractionAt = new Date();
+            session.interactionCount += 1;
+            await session.save();
+            console.log('✅ Session updated');
+            
+            // Process workflow if applicable
+            if (session.workflowId && session.currentNodeId) {
+                console.log('⚙️ Processing workflow input...');
+                
+                try {
+                    await processWorkflowInput(session, messageText);
+                    console.log('✅ Workflow input processed');
+                } catch (error) {
+                    console.error('❌ Error processing workflow input:', error);
+                }
+            }
+        } else if (value.statuses && value.statuses[0]) {
+            // Process message status updates
+            const status = value.statuses[0];
+            console.log('📊 Message status update:', status.id, status.status);
         }
         
-        const message = value.messages[0];
-        const phoneNumber = message.from;
-        const messageText = message.text?.body;
-        
-        // Import your models
-        const { User } = require('./models/Users');
-        const { UserSession } = require('./models/UserSessions');
-        const { Message } = require('./models/Messages');
-        const { processWorkflowInput } = require('./services/workflowExecutor');
-        
-        // Find user
-        const formattedPhone = `+${phoneNumber}`;
-        const user = await User.findOne({ phone: formattedPhone });
-        
-        if (!user) {
-            console.log('User not found for:', formattedPhone);
-            return res.sendStatus(200);
-        }
-        
-        // Find active session
-        const session = await UserSession.findOne({
-            userId: user._id,
-            status: 'active'
-        }).sort({ createdAt: -1 });
-        
-        if (!session) {
-            console.log('No active session for user');
-            return res.sendStatus(200);
-        }
-        
-        // Save message
-        await Message.create({
-            sessionId: session._id,
-            userId: user._id,
-            sender: 'user',
-            content: messageText,
-            whatsappMessageId: message.id
-        });
-        
-        // Process workflow
-        await processWorkflowInput(session, messageText);
-        
-        res.sendStatus(200);
+        // Always return 200 to WhatsApp
+        return res.sendStatus(200);
     } catch (error) {
-        console.error('Error:', error);
-        res.sendStatus(200);
+        console.error('❌ ERROR in webhook handler:', error);
+        // Always return 200 to prevent WhatsApp retries
+        return res.sendStatus(200);
     }
 });
+
+// Add this to your routes
+app.get('/api/test/messages', async (req, res) => {
+    try {
+        const { Message } = require('./models/Messages');
+        const messages = await Message.find()
+            .sort({ createdAt: -1 })
+            .limit(20);
+        
+        res.json({
+            success: true,
+            count: messages.length,
+            messages
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+})
 
 // Security middlewares
 app.use(helmet());

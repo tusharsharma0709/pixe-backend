@@ -343,8 +343,7 @@ const MessageController = {
         }
     },
 
-    // Update your receiveMessage in MessageController.js to handle WhatsApp webhook format:
-// Update receiveMessage in MessageController.js
+// Update receiveMessage in MessageController.js to better handle workflow processing
 receiveMessage: async (req, res) => {
     try {
         console.log('\n=== WhatsApp Webhook Received ===');
@@ -362,70 +361,112 @@ receiveMessage: async (req, res) => {
         const value = changes.value;
         
         // Handle different types of webhooks (messages, statuses, etc.)
-        if (!value.messages || !value.messages[0]) {
-            console.log('No messages in webhook, returning 200');
-            return res.sendStatus(200);
-        }
-        
-        const message = value.messages[0];
-        const phoneNumber = message.from; // Format: 919302239283 (without +)
-        const messageText = message.text?.body;
-        const whatsappMessageId = message.id;
-        
-        console.log('From:', phoneNumber);
-        console.log('Message:', messageText);
-        console.log('Message ID:', whatsappMessageId);
-        
-        // Add + to phone number for database lookup
-        const formattedPhone = `+${phoneNumber}`;
-        
-        // Find user by phone number
-        const user = await User.findOne({ phone: formattedPhone });
-        if (!user) {
-            console.error('User not found for phone:', formattedPhone);
-            return res.sendStatus(200);
-        }
-        
-        // Find active session
-        const session = await UserSession.findOne({
-            userId: user._id,
-            status: 'active'
-        }).sort({ createdAt: -1 });
+        if (value.messages && value.messages[0]) {
+            // Handle incoming message
+            const message = value.messages[0];
+            const phoneNumber = message.from; // Format: 919302239283 (without +)
+            const messageText = message.text?.body;
+            const whatsappMessageId = message.id;
+            
+            console.log('From:', phoneNumber);
+            console.log('Message:', messageText);
+            console.log('Message ID:', whatsappMessageId);
+            
+            // Add + to phone number for database lookup
+            const formattedPhone = `+${phoneNumber}`;
+            
+            // Find user by phone number
+            const user = await User.findOne({ phone: formattedPhone });
+            
+            if (!user) {
+                console.error('User not found for phone:', formattedPhone);
+                // Create new user if not found
+                try {
+                    const newUser = new User({
+                        phone: formattedPhone,
+                        status: 'new',
+                        source: 'whatsapp'
+                    });
+                    await newUser.save();
+                    console.log('Created new user:', newUser._id);
+                } catch (userCreateError) {
+                    console.error('Error creating new user:', userCreateError);
+                }
+                return res.sendStatus(200);
+            }
+            
+            // Find active session
+            const session = await UserSession.findOne({
+                userId: user._id,
+                status: 'active'
+            }).sort({ createdAt: -1 });
 
-        if (!session) {
-            console.error('No active session found for user:', user._id);
-            return res.sendStatus(200);
-        }
-        
-        console.log('Found session:', session._id);
-        console.log('Current node:', session.currentNodeId);
-        
-        // Create message record
-        const newMessage = new Message({
-            sessionId: session._id,
-            userId: user._id,
-            agentId: session.agentId,
-            adminId: session.adminId,
-            campaignId: session.campaignId,
-            sender: 'user',
-            messageType: 'text',
-            content: messageText,
-            status: 'delivered',
-            whatsappMessageId
-        });
+            if (!session) {
+                console.error('No active session found for user:', user._id);
+                // Optionally create a new session with default workflow here
+                return res.sendStatus(200);
+            }
+            
+            console.log('Found session:', session._id);
+            console.log('Current node:', session.currentNodeId);
+            
+            // Create message record regardless of workflow
+            const newMessage = new Message({
+                sessionId: session._id,
+                userId: user._id,
+                agentId: session.agentId,
+                adminId: session.adminId,
+                campaignId: session.campaignId,
+                sender: 'user',
+                messageType: 'text',
+                content: messageText,
+                status: 'delivered',
+                whatsappMessageId
+            });
 
-        await newMessage.save();
-        
-        // Update session activity
-        session.lastInteractionAt = new Date();
-        session.interactionCount += 1;
-        await session.save();
-        
-        // Process workflow if applicable
-        if (session.workflowId && session.currentNodeId) {
-            console.log('Processing workflow input...');
-            const { processWorkflowInput } = require('../services/workflowExecutor');
-            await processWorkflowInput(session, messageText);
+            await newMessage.save();
+            console.log('Saved user message to database');
+            
+            // Update session activity
+            session.lastInteractionAt = new Date();
+            session.interactionCount += 1;
+            
+            // Process workflow if applicable
+            if (session.workflowId && session.currentNodeId) {
+                console.log('Processing workflow input...');
+                const { processWorkflowInput } = require('../services/workflowExecutor');
+                
+                try {
+                    await processWorkflowInput(session, messageText);
+                    console.log('Workflow input processed successfully');
+                } catch (workflowError) {
+                    console.error('Error processing workflow input:', workflowError);
+                }
+            } else {
+                // If not part of a workflow, just save the session
+                await session.save();
+            }
+            
+        } else if (value.statuses && value.statuses[0]) {
+            // Handle message status updates
+            const status = value.statuses[0];
+            console.log('Status update for message:', status.id);
+            console.log('New status:', status.status);
+            
+            // Update message status in database
+            try {
+                await Message.findOneAndUpdate(
+                    { whatsappMessageId: status.id },
+                    { 
+                        status: status.status,
+                        deliveredAt: status.status === 'delivered' ? new Date() : undefined,
+                        readAt: status.status === 'read' ? new Date() : undefined
+                    }
+                );
+                console.log('Updated message status in database');
+            } catch (statusError) {
+                console.error('Error updating message status:', statusError);
+            }
         }
         
         // Always return 200 to WhatsApp

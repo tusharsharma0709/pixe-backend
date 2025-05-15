@@ -492,29 +492,43 @@ const integrateWithCRM = async (crmData) => {
   }
 };
 
-// services/whatsappService.js
-// Update your sendMessage function in whatsappServices.js
+// Update the sendMessage function with better error handling
 const sendMessage = async (phoneNumber, message) => {
   try {
-      const phoneStr = String(phoneNumber);
-      const formattedPhone = phoneStr.startsWith('+') ? phoneStr : `+${phoneStr}`;
+      console.log(`\n📤 SENDING WHATSAPP MESSAGE`);
       
+      // Validate and format inputs
+      if (!phoneNumber) {
+          throw new Error('Phone number is required');
+      }
+      
+      if (!message) {
+          throw new Error('Message content is required');
+      }
+      
+      // Format phone number (remove +, spaces, etc.)
+      const phoneStr = String(phoneNumber);
+      const formattedPhone = phoneStr.startsWith('+') ? 
+          phoneStr.substring(1) : phoneStr.replace(/[^\d]/g, '');
+      
+      console.log(`  To: ${formattedPhone} (original: ${phoneNumber})`);
+      console.log(`  Message: "${message}"`);
+      
+      // Build request URL and payload
       const url = `https://graph.facebook.com/v22.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
       
       const payload = {
           messaging_product: "whatsapp",
-          to: formattedPhone.replace('+', ''),
+          to: formattedPhone,
           type: "text",
           text: {
               body: String(message)
           }
       };
 
-      console.log('\n=== WhatsApp API Request ===');
-      console.log('Phone Number ID:', process.env.WHATSAPP_PHONE_NUMBER_ID);
-      console.log('To:', formattedPhone.replace('+', ''));
-      console.log('Message:', message);
-
+      console.log(`  API URL: ${url}`);
+      
+      // Send request
       const response = await axios.post(url, payload, {
           headers: {
               'Authorization': `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
@@ -522,25 +536,38 @@ const sendMessage = async (phoneNumber, message) => {
           }
       });
       
-      console.log('\n=== WhatsApp API Response ===');
-      console.log('Status:', response.status);
-      console.log('Response Data:', JSON.stringify(response.data, null, 2));
-      console.log('Message ID:', response.data.messages?.[0]?.id);
-      console.log('Contacts:', response.data.contacts);
+      console.log(`✅ Message sent successfully`);
+      console.log(`  Status: ${response.status}`);
+      console.log(`  Response: ${JSON.stringify(response.data)}`);
       
-      // Check if message was actually accepted
+      // Validate response
       if (!response.data.messages || response.data.messages.length === 0) {
-          console.error('WARNING: No message ID returned!');
+          console.error('⚠️ No message ID returned in response');
+          throw new Error('Invalid response: No message ID returned');
       }
       
+      // Return response data
       return response.data;
   } catch (error) {
-      console.error('\n=== WhatsApp API Error ===');
-      console.error('Status:', error.response?.status);
-      console.error('Error:', error.response?.data);
+      console.error(`❌ WHATSAPP SEND ERROR`);
+      
+      if (error.response) {
+          // The request was made and the server responded with a status code
+          // that falls out of the range of 2xx
+          console.error(`  Status: ${error.response.status}`);
+          console.error(`  Response: ${JSON.stringify(error.response.data || {})}`);
+      } else if (error.request) {
+          // The request was made but no response was received
+          console.error(`  No response received`);
+      } else {
+          // Something happened in setting up the request that triggered an Error
+          console.error(`  Error: ${error.message}`);
+      }
+      
+      // Throw enhanced error
       throw error;
   }
-}
+};
 
 
 module.exports = {
