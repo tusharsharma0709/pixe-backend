@@ -54,141 +54,89 @@ const fileUploadRoutes = require('./routes/uploadFileRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const messageRoutes = require('./routes/messageRoutes')
 
-// Update your webhook verification route
-app.get('/webhook', (req, res) => {
-    console.log('Webhook verification request received');
-    console.log('Query params:', req.query);
+// Add this to your app.js - production webhook handler
+app.post('/webhook', (req, res) => {
+    // Return 200 OK immediately for faster response
+    res.status(200).send('OK');
     
-    // Get parameters from query string
+    // Process webhook asynchronously
+    (async () => {
+        try {
+            console.log('WhatsApp webhook received');
+            
+            const { entry } = req.body;
+            if (!entry || !entry[0] || !entry[0].changes) {
+                return;
+            }
+            
+            const changes = entry[0].changes[0];
+            const value = changes.value;
+            
+            // Handle message
+            if (value.messages && value.messages[0]) {
+                const message = value.messages[0];
+                const phoneNumber = message.from;
+                const messageText = message.text?.body;
+                const messageId = message.id;
+                
+                console.log(`Message from ${phoneNumber}: ${messageText}`);
+                
+                // Find user
+                const { User } = require('./models/Users');
+                const { UserSession } = require('./models/UserSessions');
+                const { Message } = require('./models/Messages');
+                
+                const user = await User.findOne({ phone: `+${phoneNumber}` });
+                if (!user) return;
+                
+                // Find active session
+                const session = await UserSession.findOne({
+                    userId: user._id,
+                    status: 'active'
+                }).sort({ createdAt: -1 });
+                
+                if (!session) return;
+                
+                // Save message
+                await Message.create({
+                    sessionId: session._id,
+                    userId: user._id,
+                    adminId: session.adminId,
+                    campaignId: session.campaignId,
+                    sender: 'user',
+                    messageType: 'text',
+                    content: messageText,
+                    status: 'delivered',
+                    whatsappMessageId: messageId
+                });
+                
+                // Update session
+                session.lastInteractionAt = new Date();
+                session.interactionCount += 1;
+                await session.save();
+                
+                // Process workflow
+                if (session.workflowId && session.currentNodeId) {
+                    const { processWorkflowInput } = require('./services/workflowExecutor');
+                    await processWorkflowInput(session, messageText);
+                }
+            }
+        } catch (error) {
+            console.error('Error processing webhook:', error);
+        }
+    })();
+});
+
+// Proper webhook verification
+app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
     
-    console.log({ mode, token, challenge });
-    
-    // Check if mode and token are correct
-    if (mode && token) {
-        // Your verify token should match what you set in Meta Dashboard
-        if (mode === 'subscribe' && token === 'my_custom_verify_token') {
-            console.log('WEBHOOK_VERIFIED');
-            res.status(200).send(challenge);
-        } else {
-            console.log('Verification failed. Token mismatch.');
-            res.sendStatus(403);
-        }
+    if (mode && token && mode === 'subscribe' && token === 'my_custom_verify_token') {
+        res.status(200).send(challenge);
     } else {
-        console.log('Missing parameters');
-        res.sendStatus(400);
-    }
-});
-
-app.post('/webhook', async (req, res) => {
-    try {
-        console.log('🔔 WEBHOOK RECEIVED:', JSON.stringify(req.body, null, 2));
-        
-        // WhatsApp sends data in this specific format
-        const { entry } = req.body;
-        
-        if (!entry || !entry[0] || !entry[0].changes) {
-            console.log('No changes in webhook, returning 200');
-            return res.sendStatus(200);
-        }
-        
-        const changes = entry[0].changes[0];
-        const value = changes.value;
-        
-        // Handle different types of webhooks (messages, statuses, etc.)
-        if (value.messages && value.messages[0]) {
-            // Handle incoming message
-            const message = value.messages[0];
-            const phoneNumber = message.from; // Format: 919302239283 (without +)
-            const messageText = message.text?.body;
-            const messageId = message.id;
-            const messageType = message.type;
-            
-            console.log('⬇️ INCOMING MESSAGE:');
-            console.log('  From:', phoneNumber);
-            console.log('  Text:', messageText);
-            console.log('  ID:', messageId);
-            console.log('  Type:', messageType);
-            
-            // Format phone number for database lookup
-            const formattedPhone = `+${phoneNumber}`;
-            
-            // Import models
-            const { User } = require('./models/Users');
-            const { UserSession } = require('./models/UserSessions');
-            const { Message } = require('./models/Messages');
-            const { processWorkflowInput } = require('./services/workflowExecutor');
-            
-            // Find user by phone number
-            const user = await User.findOne({ phone: formattedPhone });
-            
-            if (!user) {
-                console.log('❌ User not found for phone:', formattedPhone);
-                return res.sendStatus(200);
-            }
-            
-            // Find active session
-            const session = await UserSession.findOne({
-                userId: user._id,
-                status: 'active'
-            }).sort({ createdAt: -1 });
-            
-            if (!session) {
-                console.log('❌ No active session found for user:', user._id);
-                return res.sendStatus(200);
-            }
-            
-            console.log('✅ Found session:', session._id);
-            console.log('  Current node:', session.currentNodeId);
-            
-            // Create message record
-            const newMessage = new Message({
-                sessionId: session._id,
-                userId: user._id,
-                agentId: session.agentId,
-                adminId: session.adminId,
-                campaignId: session.campaignId,
-                sender: 'user',
-                messageType: messageType || 'text',
-                content: messageText,
-                status: 'delivered',
-                whatsappMessageId: messageId
-            });
-            
-            await newMessage.save();
-            console.log('✅ Message saved to database');
-            
-            // Update session activity
-            session.lastInteractionAt = new Date();
-            session.interactionCount += 1;
-            await session.save();
-            console.log('✅ Session updated');
-            
-            // Process workflow if applicable
-            if (session.workflowId && session.currentNodeId) {
-                console.log('⚙️ Processing workflow input...');
-                
-                try {
-                    await processWorkflowInput(session, messageText);
-                    console.log('✅ Workflow input processed');
-                } catch (error) {
-                    console.error('❌ Error processing workflow input:', error);
-                }
-            }
-        } else if (value.statuses && value.statuses[0]) {
-            // Process message status updates
-            const status = value.statuses[0];
-            console.log('📊 Message status update:', status.id, status.status);
-        }
-        
-        // Always return 200 to WhatsApp
-        return res.sendStatus(200);
-    } catch (error) {
-        console.error('❌ ERROR in webhook handler:', error);
-        // Always return 200 to prevent WhatsApp retries
-        return res.sendStatus(200);
+        res.sendStatus(403);
     }
 });
 
