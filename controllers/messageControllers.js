@@ -343,24 +343,44 @@ const MessageController = {
         }
     },
 
-    // Receive message from user (webhook endpoint)
+    // Update your receiveMessage in MessageController.js to handle WhatsApp webhook format:
     receiveMessage: async (req, res) => {
         try {
-            const {
-                from: phoneNumber,
-                message: whatsappMessage,
-                messageId: whatsappMessageId
-            } = req.body;
-
-            // Find user by phone number
-            const user = await User.findOne({ phone: phoneNumber });
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: "User not found"
-                });
+            // WhatsApp sends data in this specific format
+            const { entry } = req.body;
+            
+            if (!entry || !entry[0].changes) {
+                return res.sendStatus(200);
             }
-
+            
+            const changes = entry[0].changes[0];
+            const value = changes.value;
+            
+            // Check if it's a message (not a status update)
+            if (!value.messages || !value.messages[0]) {
+                return res.sendStatus(200);
+            }
+            
+            const message = value.messages[0];
+            const phoneNumber = message.from; // Format: 919302239283 (without +)
+            const messageText = message.text?.body;
+            const whatsappMessageId = message.id;
+            
+            console.log('\n=== Received WhatsApp Message ===');
+            console.log('From:', phoneNumber);
+            console.log('Message:', messageText);
+            console.log('Message ID:', whatsappMessageId);
+            
+            // Add + to phone number for database lookup
+            const formattedPhone = `+${phoneNumber}`;
+            
+            // Find user by phone number
+            const user = await User.findOne({ phone: formattedPhone });
+            if (!user) {
+                console.error('User not found for phone:', formattedPhone);
+                return res.sendStatus(200);
+            }
+            
             // Find active session
             const session = await UserSession.findOne({
                 userId: user._id,
@@ -368,72 +388,85 @@ const MessageController = {
             }).sort({ createdAt: -1 });
 
             if (!session) {
-                return res.status(404).json({
-                    success: false,
-                    message: "No active session found"
-                });
+                console.error('No active session found for user:', user._id);
+                return res.sendStatus(200);
             }
-
+            
+            console.log('Found session:', session._id);
+            console.log('Current node:', session.currentNodeId);
+            
             // Create message record
-            const message = new Message({
+            const newMessage = new Message({
                 sessionId: session._id,
                 userId: user._id,
                 agentId: session.agentId,
                 adminId: session.adminId,
                 campaignId: session.campaignId,
                 sender: 'user',
-                messageType: whatsappMessage.type || 'text',
-                content: whatsappMessage.text?.body || whatsappMessage.caption || '',
-                metadata: whatsappMessage,
-                mediaUrl: whatsappMessage.image?.url || whatsappMessage.document?.url,
-                mediaType: whatsappMessage.type,
+                messageType: 'text',
+                content: messageText,
                 status: 'delivered',
                 whatsappMessageId
             });
 
-            await message.save();
-
+            await newMessage.save();
+            
             // Update session activity
             session.lastInteractionAt = new Date();
             session.interactionCount += 1;
             await session.save();
-
-            // Create notification for assigned agent
-            if (session.agentId) {
-                await createNotification({
-                    title: "New Message from User",
-                    description: `${user.name || user.phone} sent a new message`,
-                    type: 'message',
-                    priority: 'high',
-                    forAgent: session.agentId,
-                    relatedTo: {
-                        model: 'Message',
-                        id: message._id
-                    },
-                    actionUrl: `/messages/${message._id}`
-                });
-            }
-
-            // ADD THIS SECTION - Process workflow if applicable
+            
+            // Process workflow if applicable
             if (session.workflowId && session.currentNodeId) {
-                const processedContent = whatsappMessage.text?.body || whatsappMessage.caption || '';
-                await processWorkflowInput(session, processedContent);
+                console.log('Processing workflow input...');
+                const { processWorkflowInput } = require('../services/workflowExecutor');
+                await processWorkflowInput(session, messageText);
             }
-
-            return res.status(201).json({
-                success: true,
-                message: "Message received successfully",
-                data: message
-            });
+            
+            // Always return 200 to WhatsApp
+            res.sendStatus(200);
+            
         } catch (error) {
             console.error("Error in receiveMessage:", error);
-            return res.status(500).json({
-                success: false,
-                message: "Internal server error",
-                error: error.message
-            });
+            // Still return 200 to prevent WhatsApp retries
+            res.sendStatus(200);
         }
     },
+
+    // Add this new method to MessageController
+verifyWebhook: async (req, res) => {
+    try {
+        const mode = req.query['hub.mode'];
+        const token = req.query['hub.verify_token'];
+        const challenge = req.query['hub.challenge'];
+        
+        console.log('Webhook verification request received');
+        console.log('Mode:', mode);
+        console.log('Token:', token);
+        console.log('Challenge:', challenge);
+        console.log('Expected token:', process.env.WHATSAPP_WEBHOOK_TOKEN || 'my_custom_verify_token');
+        
+        // Check if mode and token are correct
+        if (mode && token) {
+            // Check the mode and token sent are correct
+            if (mode === 'subscribe' && token === (process.env.WHATSAPP_WEBHOOK_TOKEN || 'my_custom_verify_token')) {
+                // Respond with the challenge token from the request
+                console.log('Webhook verified successfully');
+                res.status(200).send(challenge);
+            } else {
+                // Respond with '403 Forbidden' if verify tokens do not match
+                console.log('Webhook verification failed - token mismatch');
+                res.sendStatus(403);
+            }
+        } else {
+            console.log('Webhook verification failed - missing parameters');
+            res.sendStatus(403);
+        }
+    } catch (error) {
+        console.error('Error in webhook verification:', error);
+        res.sendStatus(500);
+    }
+},
 
     // Mark message as read
     markAsRead: async (req, res) => {

@@ -22,4 +22,7 @@ router.patch('/:id/read', adminOrAgentAuth, MessageController.markAsRead);
 // Receive message from user via WhatsApp webhook
 router.post('/webhook/receive', MessageController.receiveMessage);
 
+// Add GET route for webhook verification
+router.get('/webhook/receive', MessageController.verifyWebhook);
+
 module.exports = router;
