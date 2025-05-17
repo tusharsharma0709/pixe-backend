@@ -519,33 +519,28 @@ receiveMessage: async (req, res) => {
 
 // Verify webhook endpoint for WhatsApp setup
 verifyWebhook: async (req, res) => {
-    try {
-        // Get query parameters
-        const mode = req.query['hub.mode'];
-        const token = req.query['hub.verify_token'];
-        const challenge = req.query['hub.challenge'];
-        
-        console.log('Webhook verification:', { mode, token, challenge });
-        
-        // Check if token and mode are in the query
-        if (mode && token) {
-            // Check if the mode and token sent are correct
-            if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-                // Respond with the challenge token
-                console.log('WEBHOOK_VERIFIED');
-                return res.status(200).send(challenge);
-            } else {
-                // Respond with '403 Forbidden' if verify tokens do not match
-                return res.sendStatus(403);
-            }
-        }
-        
-        return res.sendStatus(400);
-    } catch (error) {
-        console.error('Error in webhook verification:', error);
-        return res.status(500).send('Server Error');
+    /** UPDATE YOUR VERIFY TOKEN
+    This will be the Verify Token value when you set up webhook**/
+    const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+  
+    // Parse params from the webhook verification request
+    let mode = req.query["hub.mode"];
+    let token = req.query["hub.verify_token"];
+    let challenge = req.query["hub.challenge"];
+  
+    // Check if a token and mode were sent
+    if (mode && token) {
+      // Check the mode and token sent are correct
+      if (mode === "subscribe" && token === VERIFY_TOKEN) {
+        // Respond with 200 OK and challenge token from the request
+        console.log("WEBHOOK_VERIFIED");
+        res.status(200).send(challenge);
+      } else {
+        // Responds with '403 Forbidden' if verify tokens do not match
+        res.sendStatus(403);
+      }
     }
-},
+  },
 
     // Mark message as read
     markAsRead: async (req, res) => {
