@@ -518,29 +518,41 @@ receiveMessage: async (req, res) => {
 },
 
 // Verify webhook endpoint for WhatsApp setup
+// In MessageController.js
 verifyWebhook: async (req, res) => {
-    /** UPDATE YOUR VERIFY TOKEN
-    This will be the Verify Token value when you set up webhook**/
-    const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-  
-    // Parse params from the webhook verification request
-    let mode = req.query["hub.mode"];
-    let token = req.query["hub.verify_token"];
-    let challenge = req.query["hub.challenge"];
-  
-    // Check if a token and mode were sent
-    if (mode && token) {
-      // Check the mode and token sent are correct
-      if (mode === "subscribe" && token === VERIFY_TOKEN) {
-        // Respond with 200 OK and challenge token from the request
-        console.log("WEBHOOK_VERIFIED");
-        res.status(200).send(challenge);
-      } else {
-        // Responds with '403 Forbidden' if verify tokens do not match
-        res.sendStatus(403);
-      }
+    try {
+        console.log('Webhook verification request received');
+        console.log('Query parameters:', req.query);
+        
+        // Get query parameters directly - use the expected names from Meta
+        const mode = req.query['hub.mode'];
+        const token = req.query['hub.verify_token'];
+        const challenge = req.query['hub.challenge'];
+        
+        console.log('Verification details:', { mode, token, challenge: !!challenge });
+        
+        // Check if token and mode are in the query
+        if (mode && token) {
+            // Check if the mode and token sent are correct
+            if (mode === 'subscribe' && token === process.env.VERIFY_TOKEN) {
+                // Respond with the challenge token
+                console.log('WEBHOOK_VERIFIED');
+                // THIS IS CRITICAL: Must return the challenge as plain text, not JSON
+                return res.status(200).send(challenge);
+            } else {
+                // Respond with '403 Forbidden' if verify tokens do not match
+                console.log('Verification failed: token mismatch');
+                return res.sendStatus(403);
+            }
+        }
+        
+        console.log('Verification failed: missing mode or token');
+        return res.sendStatus(400);
+    } catch (error) {
+        console.error('Error in webhook verification:', error);
+        return res.status(500).send('Server Error');
     }
-  },
+},
 
     // Mark message as read
     markAsRead: async (req, res) => {
