@@ -54,109 +54,6 @@ const fileUploadRoutes = require('./routes/uploadFileRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const messageRoutes = require('./routes/messageRoutes')
 
-// Add this to your app.js - production webhook handler
-app.post('/webhook', (req, res) => {
-    // Return 200 OK immediately for faster response
-    res.status(200).send('OK');
-    
-    // Process webhook asynchronously
-    (async () => {
-        try {
-            console.log('WhatsApp webhook received');
-            
-            const { entry } = req.body;
-            if (!entry || !entry[0] || !entry[0].changes) {
-                return;
-            }
-            
-            const changes = entry[0].changes[0];
-            const value = changes.value;
-            
-            // Handle message
-            if (value.messages && value.messages[0]) {
-                const message = value.messages[0];
-                const phoneNumber = message.from;
-                const messageText = message.text?.body;
-                const messageId = message.id;
-                
-                console.log(`Message from ${phoneNumber}: ${messageText}`);
-                
-                // Find user
-                const { User } = require('./models/Users');
-                const { UserSession } = require('./models/UserSessions');
-                const { Message } = require('./models/Messages');
-                
-                const user = await User.findOne({ phone: `+${phoneNumber}` });
-                if (!user) return;
-                
-                // Find active session
-                const session = await UserSession.findOne({
-                    userId: user._id,
-                    status: 'active'
-                }).sort({ createdAt: -1 });
-                
-                if (!session) return;
-                
-                // Save message
-                await Message.create({
-                    sessionId: session._id,
-                    userId: user._id,
-                    adminId: session.adminId,
-                    campaignId: session.campaignId,
-                    sender: 'user',
-                    messageType: 'text',
-                    content: messageText,
-                    status: 'delivered',
-                    whatsappMessageId: messageId
-                });
-                
-                // Update session
-                session.lastInteractionAt = new Date();
-                session.interactionCount += 1;
-                await session.save();
-                
-                // Process workflow
-                if (session.workflowId && session.currentNodeId) {
-                    const { processWorkflowInput } = require('./services/workflowExecutor');
-                    await processWorkflowInput(session, messageText);
-                }
-            }
-        } catch (error) {
-            console.error('Error processing webhook:', error);
-        }
-    })();
-});
-
-// Proper webhook verification
-app.get('/webhook', (req, res) => {
-    const mode = req.query['hub.mode'];
-    const token = req.query['hub.verify_token'];
-    const challenge = req.query['hub.challenge'];
-    
-    if (mode && token && mode === 'subscribe' && token === 'my_custom_verify_token') {
-        res.status(200).send(challenge);
-    } else {
-        res.sendStatus(403);
-    }
-});
-
-// Add this to your routes
-app.get('/api/test/messages', async (req, res) => {
-    try {
-        const { Message } = require('./models/Messages');
-        const messages = await Message.find()
-            .sort({ createdAt: -1 })
-            .limit(20);
-        
-        res.json({
-            success: true,
-            count: messages.length,
-            messages
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-})
 
 // Security middlewares
 app.use(helmet());
@@ -181,13 +78,6 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(compression());
-
-// Logging
-if (process.env.NODE_ENV === 'development') {
-    app.use(morgan('dev'));
-} else {
-    app.use(morgan('combined'));
-}
 
 // Rate limiting
 const limiter = rateLimit({
