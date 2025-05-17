@@ -23,6 +23,17 @@ if (!admin.apps.length) {
     });
 }
 const app = express();
+// Add this to app.js before routes to modify URL parsing
+app.set('query parser', (queryString) => {
+    console.log('Raw query string:', queryString);
+    const result = new URLSearchParams(queryString);
+    const params = {};
+    for (const [key, value] of result) {
+      params[key] = value;
+    }
+    console.log('Custom parsed params:', params);
+    return params;
+  });
 app.set('trust proxy', 1);
 // Add a basic route for the homepage
 app.get('/', (req, res) => {

@@ -522,12 +522,31 @@ receiveMessage: async (req, res) => {
 verifyWebhook: async (req, res) => {
     try {
         console.log('Webhook verification request received');
+        console.log('Original URL:', req.originalUrl);
         console.log('Query parameters:', req.query);
         
-        // Get query parameters directly - use the expected names from Meta
-        const mode = req.query['hub.mode'];
-        const token = req.query['hub.verify_token'];
-        const challenge = req.query['hub.challenge'];
+        // MANUAL QUERY PARSING since req.query is empty
+        const url = req.originalUrl || req.url;
+        const queryString = url.split('?')[1];
+        
+        if (!queryString) {
+            console.log('No query string found');
+            return res.status(400).send('Bad Request');
+        }
+        
+        // Parse the query string manually
+        const params = {};
+        queryString.split('&').forEach(param => {
+            const [key, value] = param.split('=');
+            params[key] = value;
+        });
+        
+        console.log('Manually parsed params:', params);
+        
+        // Get query parameters using manual parsing
+        const mode = params['hub.mode'];
+        const token = params['hub.verify_token'];
+        const challenge = params['hub.challenge'];
         
         console.log('Verification details:', { mode, token, challenge: !!challenge });
         
@@ -537,7 +556,6 @@ verifyWebhook: async (req, res) => {
             if (mode === 'subscribe' && token === process.env.VERIFY_TOKEN) {
                 // Respond with the challenge token
                 console.log('WEBHOOK_VERIFIED');
-                // THIS IS CRITICAL: Must return the challenge as plain text, not JSON
                 return res.status(200).send(challenge);
             } else {
                 // Respond with '403 Forbidden' if verify tokens do not match
