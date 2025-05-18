@@ -268,8 +268,8 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
         });
         
         // Add isLinked flag for easier access
-        if (result.success && result.data && result.data.link_status) {
-            result.isLinked = result.data.link_status === 'Y' || result.data.link_status === true;
+        if (result.success && result.data && result.data.linking_status) {
+            result.isLinked = result.data.linking_status === 'Y' || result.data.linking_status === true;
         } else {
             result.isLinked = false;
         }
