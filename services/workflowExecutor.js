@@ -1,5 +1,4 @@
-// Improved workflowExecutor.js - Focus on fixing webhook response handling
-
+// services/workflowExecutor.js
 const { Message } = require('../models/Messages');
 const { Workflow } = require('../models/Workflows');
 const { UserSession } = require('../models/UserSessions');
@@ -9,10 +8,40 @@ const whatsappService = require('./whatsappServices');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 
-// services/workflowExecutor.js - Fix the processWorkflowInput function
+// Store recently processed message IDs to prevent duplicate processing
+const recentProcessedMessages = new Map();
 
-async function processWorkflowInput(session, input) {
+// Track node execution counts to prevent infinite loops
+const nodeExecutionCounts = new Map();
+
+/**
+ * Process user input for a workflow
+ * @param {Object} session - The user session
+ * @param {String} input - The user input message
+ * @param {String} messageId - Optional WhatsApp message ID for deduplication
+ */
+async function processWorkflowInput(session, input, messageId = null) {
     try {
+        // Check for duplicate message processing if messageId is provided
+        if (messageId) {
+            const key = `${session._id}:${messageId}`;
+            if (recentProcessedMessages.has(key)) {
+                console.log(`⚠️ Skipping duplicate message processing: ${messageId}`);
+                return;
+            }
+            
+            // Add to processed messages
+            recentProcessedMessages.set(key, Date.now());
+            
+            // Cleanup old entries (keep for 1 hour)
+            const now = Date.now();
+            for (const [key, timestamp] of recentProcessedMessages.entries()) {
+                if (now - timestamp > 3600000) { // 1 hour
+                    recentProcessedMessages.delete(key);
+                }
+            }
+        }
+        
         console.log(`⚙️ Processing workflow input for session ${session._id}`);
         console.log(`  Input: "${input}"`);
         console.log(`  Current node: ${session.currentNodeId}`);
@@ -59,6 +88,12 @@ async function processWorkflowInput(session, input) {
                 // First save the session with the input
                 await session.save();
                 
+                // Reset the execution count for the next node to prevent false positives
+                resetNodeExecutionCount(session._id, currentNode.nextNodeId);
+                
+                // Add a small delay to prevent race conditions
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
                 // Then execute the next node
                 await executeWorkflowNode(session, currentNode.nextNodeId);
             } else {
@@ -82,23 +117,40 @@ async function processWorkflowInput(session, input) {
     }
 }
 
+/**
+ * Execute a workflow node
+ * @param {Object} session - The user session
+ * @param {String} nodeId - The node ID to execute
+ */
 async function executeWorkflowNode(session, nodeId) {
     try {
         console.log(`\n🔄 Executing workflow node for session ${session._id}`);
         console.log(`  Node ID: ${nodeId}`);
         
+        // Check for excessive node executions (loop prevention)
+        const sessionNodeKey = `${session._id}:${nodeId}`;
+        const executionCount = incrementNodeExecutionCount(sessionNodeKey);
+        
+        // If a node has been executed too many times (potential loop), stop execution
+        const MAX_NODE_EXECUTIONS = 5;
+        if (executionCount > MAX_NODE_EXECUTIONS) {
+            console.error(`⛔ Detected potential infinite loop: node ${nodeId} executed ${executionCount} times`);
+            console.error(`⛔ Stopping workflow execution to prevent spamming the user`);
+            return false;
+        }
+        
         // Get workflow
         const workflow = await Workflow.findById(session.workflowId);
         if (!workflow) {
             console.error(`❌ Workflow ${session.workflowId} not found`);
-            return;
+            return false;
         }
         
         // Find node
         const node = workflow.nodes.find(n => n.nodeId === nodeId);
         if (!node) {
             console.error(`❌ Node ${nodeId} not found in workflow ${workflow._id}`);
-            return;
+            return false;
         }
         
         console.log(`  Node name: ${node.name}`);
@@ -150,12 +202,15 @@ async function executeWorkflowNode(session, nodeId) {
                     
                     console.log('✅ Saved message to database');
                     
-                    // Wait a short time to avoid rate limits
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    // Wait to avoid rate limits (also helps prevent message flood)
+                    await new Promise(resolve => setTimeout(resolve, 1500));
                     
                     // Move to next node if defined
                     if (node.nextNodeId) {
                         const nextNode = workflow.nodes.find(n => n.nodeId === node.nextNodeId);
+                        
+                        // Reset the execution count for the next node to prevent false positives
+                        resetNodeExecutionCount(session._id, node.nextNodeId);
                         
                         // If next node is input, just update session and wait
                         if (nextNode && nextNode.type === 'input') {
@@ -180,6 +235,7 @@ async function executeWorkflowNode(session, nodeId) {
                     }
                 } catch (error) {
                     console.error(`❌ Error sending message:`, error);
+                    return false;
                 }
                 break;
                 
@@ -223,6 +279,7 @@ async function executeWorkflowNode(session, nodeId) {
                         console.log('✅ Saved prompt message to database');
                     } catch (error) {
                         console.error(`❌ Error sending input prompt:`, error);
+                        return false;
                     }
                 }
                 
@@ -232,18 +289,67 @@ async function executeWorkflowNode(session, nodeId) {
             case 'condition':
                 console.log(`  Evaluating condition: ${node.condition}`);
                 
+                // Check for retry count on this condition node
+                if (node.maxRetries) {
+                    // Initialize retry count in session data if needed
+                    if (!session.data) session.data = {};
+                    if (!session.data.retryCount) session.data.retryCount = {};
+                    if (!session.data.retryCount[node.nodeId]) session.data.retryCount[node.nodeId] = 0;
+                    
+                    // Increment retry count
+                    session.data.retryCount[node.nodeId]++;
+                    session.markModified('data');
+                    
+                    console.log(`  Retry count for node ${node.nodeId}: ${session.data.retryCount[node.nodeId]}/${node.maxRetries}`);
+                    
+                    // Check if max retries reached
+                    if (session.data.retryCount[node.nodeId] > node.maxRetries) {
+                        console.log(`⚠️ Max retries (${node.maxRetries}) reached for condition node ${node.nodeId}`);
+                        
+                        // Go to a designated failure node or end the workflow
+                        if (node.maxRetriesNodeId) {
+                            console.log(`⏭️ Moving to max retries node: ${node.maxRetriesNodeId}`);
+                            
+                            // Reset the execution count for the next node
+                            resetNodeExecutionCount(session._id, node.maxRetriesNodeId);
+                            
+                            return executeWorkflowNode(session, node.maxRetriesNodeId);
+                        } else {
+                            console.log(`⚠️ No max retries node defined, stopping workflow execution`);
+                            return false;
+                        }
+                    }
+                }
+                
+                // Debug the data being used for condition evaluation
+                console.log(`  Evaluation data:`, session.data);
+                
                 // Evaluate condition
                 const conditionResult = evaluateCondition(node.condition, session.data);
                 console.log(`  Condition result: ${conditionResult}`);
+                
+                // Save condition result to data for potential debugging
+                if (!session.data) session.data = {};
+                session.data[`${node.nodeId}_result`] = conditionResult;
+                session.markModified('data');
+                await session.save();
                 
                 // Determine next node based on condition result
                 const nextNodeId = conditionResult ? node.trueNodeId : node.falseNodeId;
                 
                 if (nextNodeId) {
                     console.log(`⏭️ Moving to ${conditionResult ? 'true' : 'false'} node: ${nextNodeId}`);
+                    
+                    // Reset the execution count for the next node
+                    resetNodeExecutionCount(session._id, nextNodeId);
+                    
+                    // Add a small delay before executing the next node
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
                     await executeWorkflowNode(session, nextNodeId);
                 } else {
                     console.error(`❌ No ${conditionResult ? 'true' : 'false'} node defined for condition`);
+                    return false;
                 }
                 break;
             
@@ -293,7 +399,7 @@ async function executeWorkflowNode(session, nodeId) {
                             ...verificationStatus
                         };
                         
-                        console.log(`✅ Retrieved verification status directly`, verificationStatus);
+                        console.log(`✅ Retrieved verification status directly:`, verificationStatus);
                     } else {
                         // For other APIs, make actual HTTP call
                         
@@ -355,9 +461,17 @@ async function executeWorkflowNode(session, nodeId) {
                     // Move to next node if defined
                     if (node.nextNodeId) {
                         console.log(`⏭️ Moving to next node: ${node.nextNodeId}`);
+                        
+                        // Reset the execution count for the next node
+                        resetNodeExecutionCount(session._id, node.nextNodeId);
+                        
+                        // Add delay before moving to next node
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                        
                         await executeWorkflowNode(session, node.nextNodeId);
                     } else {
                         console.log(`⚠️ No next node defined for API node ${node.nodeId}`);
+                        return true;
                     }
                 } catch (error) {
                     console.error(`❌ Error executing API node:`, error.message);
@@ -372,10 +486,18 @@ async function executeWorkflowNode(session, nodeId) {
                     session.markModified('data');
                     await session.save();
                     
-                    // Go to error node if defined
+                    // IMPORTANT: Go to error node if defined, otherwise STOP execution
                     if (node.errorNodeId) {
                         console.log(`⏭️ Moving to error node: ${node.errorNodeId}`);
+                        
+                        // Reset the execution count for the error node
+                        resetNodeExecutionCount(session._id, node.errorNodeId);
+                        
                         await executeWorkflowNode(session, node.errorNodeId);
+                    } else {
+                        console.log(`⚠️ No error node defined, stopping workflow execution`);
+                        // Do NOT continue to next node on error if no error node is defined
+                        return false;
                     }
                 }
                 break;
@@ -387,11 +509,14 @@ async function executeWorkflowNode(session, nodeId) {
                 session.completedAt = new Date();
                 await session.save();
                 console.log(`✅ Workflow completed`);
-                break;
+                return true;
                 
             default:
                 console.log(`⚠️ Unsupported node type: ${node.type}`);
+                return false;
         }
+        
+        return true;
     } catch (error) {
         console.error(`❌ Error executing workflow node:`, error);
         // Try to save session anyway
@@ -400,13 +525,50 @@ async function executeWorkflowNode(session, nodeId) {
         } catch (saveError) {
             console.error(`❌ Error saving session:`, saveError);
         }
+        return false;
     }
+}
+
+/**
+ * Track node execution count to prevent infinite loops
+ * @param {String} key - The session:nodeId key
+ * @returns {Number} The current execution count
+ */
+function incrementNodeExecutionCount(key) {
+    const count = nodeExecutionCounts.get(key) || 0;
+    nodeExecutionCounts.set(key, count + 1);
+    
+    // Auto cleanup - remove counts older than 1 hour
+    setTimeout(() => {
+        nodeExecutionCounts.delete(key);
+    }, 3600000);
+    
+    return count + 1;
+}
+
+/**
+ * Reset the execution count for a node
+ * @param {String} sessionId - The session ID
+ * @param {String} nodeId - The node ID
+ */
+function resetNodeExecutionCount(sessionId, nodeId) {
+    const key = `${sessionId}:${nodeId}`;
+    nodeExecutionCounts.delete(key);
 }
 
 // Evaluate conditions for decision nodes
 function evaluateCondition(condition, data) {
     try {
         if (!condition) return false;
+        
+        // Safety check for data
+        if (!data) {
+            console.error('❌ No data provided for condition evaluation');
+            return false;
+        }
+        
+        // Debug condition evaluation
+        console.log(`  Evaluating: "${condition}" with data:`, data);
         
         // Check for length conditions
         const lengthRegex = /(\w+)\.length\s*(>|<|>=|<=|==|!=)\s*(\d+)/;
@@ -441,7 +603,49 @@ function evaluateCondition(condition, data) {
             return fieldValue && fieldValue.includes(searchValue);
         }
         
-        // Check for comparison operators
+        // Check for nested property access (object.property)
+        const nestedRegex = /(\w+)\.(\w+)\s*(>|<|>=|<=|==|!=)\s*([\w"']+)/;
+        const nestedMatch = condition.match(nestedRegex);
+        
+        if (nestedMatch) {
+            const [, objName, propName, operator, valueStr] = nestedMatch;
+            
+            // Check if the object exists
+            if (!data[objName] || typeof data[objName] !== 'object') {
+                console.log(`  Object ${objName} not found in data or not an object`);
+                return false;
+            }
+            
+            const fieldValue = data[objName][propName];
+            console.log(`  Nested property lookup: ${objName}.${propName} = `, fieldValue);
+            
+            // Parse the comparison value
+            let value;
+            if (valueStr.startsWith('"') || valueStr.startsWith("'")) {
+                value = valueStr.substring(1, valueStr.length - 1);
+            } else if (valueStr === 'true') {
+                value = true;
+            } else if (valueStr === 'false') {
+                value = false;
+            } else if (!isNaN(Number(valueStr))) {
+                value = Number(valueStr);
+            } else {
+                value = data[valueStr]; // It might be another variable reference
+            }
+            
+            // Perform the comparison
+            switch (operator) {
+                case '>': return fieldValue > value;
+                case '<': return fieldValue < value;
+                case '>=': return fieldValue >= value;
+                case '<=': return fieldValue <= value;
+                case '==': return fieldValue == value; // Loose equality
+                case '!=': return fieldValue != value; // Loose inequality
+                default: return false;
+            }
+        }
+        
+        // Check for direct comparison operators
         const compareRegex = /(\w+)\s*(>|<|>=|<=|==|!=)\s*([\w"']+)/;
         const compareMatch = condition.match(compareRegex);
         
@@ -465,6 +669,9 @@ function evaluateCondition(condition, data) {
                 value = data[valueStr];
             }
             
+            // Debug comparison
+            console.log(`  Comparing: ${field} (${fieldValue}) ${operator} ${value}`);
+            
             switch (operator) {
                 case '>': return fieldValue > value;
                 case '<': return fieldValue < value;
@@ -476,12 +683,9 @@ function evaluateCondition(condition, data) {
             }
         }
         
-        // Complex conditions (mostly for objects and nested properties)
-        if (condition.includes('&&') || condition.includes('||')) {
+        // Try complex conditions as a last resort
+        if (condition.includes('&&') || condition.includes('||') || condition.includes('!')) {
             try {
-                // Safety check if data is missing
-                if (!data) return false;
-                
                 // Create safe evaluation context
                 const context = { ...data };
                 
