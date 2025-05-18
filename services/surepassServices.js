@@ -205,25 +205,18 @@ const verifyPAN = async (panNumber, consent = 'Y') => {
 };
 
 /**
+/**
  * Check Aadhaar-PAN link
  * @param {String} aadhaarNumber - 12-digit Aadhaar number
+ * @param {String} panNumber - 10-character PAN number
  * @param {String} consent - Consent flag (Y/N)
  * @returns {Promise} - API response
  */
-const checkAadhaarPANLink = async (aadhaarNumber, consent = 'Y') => {
+const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
     try {
-        // Validate inputs first
-        if (!aadhaarNumber) {
-            console.error('Aadhaar number is required');
-            return {
-                success: false,
-                error: 'Aadhaar number is required',
-                isLinked: false
-            };
-        }
-        
-        // Clean the numbers - only after confirming they exist
+        // Clean the numbers
         const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
+        const cleanPanNumber = panNumber.replace(/\s/g, '').toUpperCase();
         
         // Log the API call (without showing full Aadhaar number)
         const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
@@ -234,32 +227,35 @@ const checkAadhaarPANLink = async (aadhaarNumber, consent = 'Y') => {
             console.error('Invalid Aadhaar number format');
             return {
                 success: false,
-                error: 'Invalid Aadhaar number format. Must be 12 digits.',
-                isLinked: false
+                error: 'Invalid Aadhaar number format. Must be 12 digits.'
             };
         }
         
-        // Make API call to SurePass
-        // IMPORTANT: Using 'id_number' instead of 'pan' based on API errors
-        const result = await postJSON('/pan/aadhaar-pan-link-check', {
-            aadhaar_number: cleanAadhaarNumber,
-            consent
-        });
-        
-        // Add isLinked flag for easier access
-        if (result.success && result.data && result.data.linking_status) {
-            result.isLinked = result.data.linking_status === 'Y' || result.data.linking_status === true;
-        } else {
-            result.isLinked = false;
+        if (cleanPanNumber.length !== 10 || !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanPanNumber)) {
+            console.error('Invalid PAN number format');
+            return {
+                success: false,
+                error: 'Invalid PAN number format. Must be 10 characters with format AAAAA0000A.'
+            };
         }
+        
+        // CRITICAL FIX: Use the exact parameters as shown in the logs
+        // From the logs, we see that API endpoint is "/pan/aadhaar-pan-link-check"
+        // And parameters are "aadhaar_number" and "consent" (where consent = PAN number)
+        const requestBody = {
+            aadhaar_number: cleanAadhaarNumber,
+            consent: cleanPanNumber // Based on the logs, 'consent' parameter is being used for PAN
+        };
+        
+        // Make API call to SurePass with correct endpoint from logs
+        const result = await postJSON('/pan/aadhaar-pan-link-check', requestBody);
         
         return result;
     } catch (error) {
         console.error('Aadhaar-PAN link check error:', error);
         return {
             success: false,
-            error: error.message,
-            isLinked: false
+            error: error.message
         };
     }
 };

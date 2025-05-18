@@ -675,26 +675,6 @@ async function checkAadhaarPanLink(sessionId) {
             throw new Error(`Invalid PAN number format: ${panNumber}`);
         }
         
-        // Check if Aadhaar and PAN are already verified separately
-        const aadhaarVerified = user.isAadhaarVerified;
-        const panVerified = user.isPanVerified;
-        
-        if (!aadhaarVerified || !panVerified) {
-            console.log(`⚠️ Required verifications not complete: Aadhaar verified: ${aadhaarVerified}, PAN verified: ${panVerified}`);
-            if (!aadhaarVerified) {
-                return {
-                    success: false,
-                    message: 'Aadhaar must be verified before checking linking status'
-                };
-            }
-            if (!panVerified) {
-                return {
-                    success: false, 
-                    message: 'PAN must be verified before checking linking status'
-                };
-            }
-        }
-        
         // If running in test mode (no SurePass API), simulate verification
         const isTestMode = !process.env.SUREPASS_API_KEY || process.env.TEST_MODE === 'true';
         
@@ -760,40 +740,56 @@ async function checkAadhaarPanLink(sessionId) {
         // Call SurePass API to check if Aadhaar and PAN are linked
         console.log(`📡 Calling SurePass API to check Aadhaar-PAN link`);
         
-        // Make API call with BOTH Aadhaar and PAN numbers
-        const result = await surepassServices.checkAadhaarPANLink(aadhaarNumber, panNumber, 'Y');
+        // IMPORTANT: Check actual request and response from logs
+        // Based on logs, the API is at /pan/aadhaar-pan-link-check
+        // And parameters are aadhaar_number and consent: panNumber
+        const result = await surepassServices.checkAadhaarPANLink(aadhaarNumber, panNumber);
         console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
         console.log(`📡 Full API response: ${JSON.stringify(result.data, null, 2)}`);
         
         // Process API response
         if (result && result.success) {
-            // IMPORTANT: Determine if linked based on API response format
-            // API might return different formats like:
-            // 1. { link_status: 'Y' } or { link_status: 'N' }
-            // 2. { linking_status: true/false }
-            // 3. { data: { link_status: 'Y' } }
-            // Or other formats
+            // IMPORTANT FIX: Check the correct location of linking_status based on API response
+            // From logs, the structure is: result.data.data.linking_status
             
-            // Try all possible paths to find the link status
+            // Define isLinked with a proper default
             let isLinked = false;
             
+            // Check all possible paths where linking status might be found
             if (result.data) {
-                if (typeof result.data.link_status !== 'undefined') {
-                    isLinked = result.data.link_status === 'Y' || result.data.link_status === true;
-                } else if (typeof result.data.linking_status !== 'undefined') {
-                    isLinked = result.data.linking_status === true || result.data.linking_status === 'Y';
-                } else if (result.data.data && typeof result.data.data.link_status !== 'undefined') {
-                    isLinked = result.data.data.link_status === 'Y' || result.data.data.link_status === true;
-                } else if (result.data.data && typeof result.data.data.linking_status !== 'undefined') {
-                    isLinked = result.data.data.linking_status === true || result.data.data.linking_status === 'Y';
-                } else if (result.data.link_check_status) {
-                    isLinked = result.data.link_check_status === 'linked' || result.data.link_check_status === true;
+                // Direct linking_status property
+                if (typeof result.data.linking_status === 'boolean') {
+                    isLinked = result.data.linking_status;
+                } 
+                // Check if it's in the data.data object
+                else if (result.data.data && typeof result.data.data.linking_status === 'boolean') {
+                    isLinked = result.data.data.linking_status;
+                }
+                // Check for "reason": "linked" at different levels
+                else if (result.data.reason === 'linked') {
+                    isLinked = true;
+                }
+                else if (result.data.data && result.data.data.reason === 'linked') {
+                    isLinked = true;
+                }
+                // Check for link_status if present
+                else if (result.data.link_status === 'Y' || result.data.link_status === true) {
+                    isLinked = true;
+                }
+                else if (result.data.data && (result.data.data.link_status === 'Y' || result.data.data.link_status === true)) {
+                    isLinked = true;
                 }
             }
             
-            // Check result.isLinked (this is set by our surepassServices.js)
-            if (typeof result.isLinked !== 'undefined') {
-                isLinked = result.isLinked;
+            // CRITICAL: Double-check the response from the logs
+            // The API returns { "linking_status": true, "reason": "linked" }
+            // So make sure we check for those specific values
+            const responseData = result.data;
+            if (responseData && responseData.data) {
+                if (responseData.data.linking_status === true && responseData.data.reason === 'linked') {
+                    console.log(`⭐ Found explicit 'linking_status: true' and 'reason: linked' in the API response`);
+                    isLinked = true;
+                }
             }
             
             console.log(`🔗 Link status determined to be: ${isLinked ? 'LINKED' : 'NOT LINKED'}`);
