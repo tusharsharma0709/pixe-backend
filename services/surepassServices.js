@@ -1,4 +1,4 @@
-// services/surepassServices.js - Updated with parameter correction for PAN
+// services/surepassServices.js - Corrected with exact API endpoints and params
 
 const axios = require('axios');
 const FormData = require('form-data');
@@ -35,7 +35,7 @@ const postJSON = async (endpoint, data) => {
                 'Authorization': `Bearer ${SUREPASS_API_KEY}`,
                 'Content-Type': 'application/json'
             },
-            timeout: 15000 // 15-second timeout
+            timeout: 20000 // 20-second timeout
         });
         
         console.log(`SurePass API response status: ${response.status}`);
@@ -190,9 +190,9 @@ const verifyPAN = async (panNumber, consent = 'Y') => {
             };
         }
         
-        // FIXED: Changed parameter name from 'pan' to 'id_number' based on API error
+        // Make API call to SurePass - Using id_number parameter
         return await postJSON('/pan/pan', {
-            id_number: cleanPanNumber,  // Changed from 'pan' to 'id_number'
+            id_number: cleanPanNumber,
             consent
         });
     } catch (error) {
@@ -238,20 +238,55 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
             };
         }
         
-        // Make API call to SurePass
+        // CORRECTED: Using the exact endpoint and parameters from the curl example
         const result = await postJSON('/pan/aadhaar-pan-link-check', {
             aadhaar_number: cleanAadhaarNumber,
-            consent
+            // Note: PAN number is not passed in the request based on the curl example
+            // If needed we can try adding it with different parameter names
         });
         
-        // Add isLinked flag for easier access
-        if (result.success && result.data && result.data.link_status) {
-            result.isLinked = result.data.link_status === 'Y' || result.data.link_status === true;
+        // Process the result to match our expected format
+        if (result.success && result.data) {
+            // Add isLinked flag based on linking_status in the response
+            const isLinked = result.data.linking_status === true || 
+                           result.data.linking_status === 'true' || 
+                           result.data.linking_status === 'Y';
+                           
+            result.isLinked = isLinked;
+            
+            // Parse the masked PAN if needed
+            if (result.data.masked_pan) {
+                result.data.pan_number = result.data.masked_pan;
+            }
+            
+            // Add link_status if it doesn't exist but linking_status does
+            if (result.data.linking_status !== undefined && result.data.link_status === undefined) {
+                result.data.link_status = result.data.linking_status ? 'Y' : 'N';
+            }
         }
         
         return result;
     } catch (error) {
         console.error('Aadhaar-PAN link check error:', error);
+        
+        // Use test mode as fallback if needed
+        if (process.env.TEST_MODE === 'true') {
+            console.log('⚠️ Falling back to test mode for Aadhaar-PAN link check');
+            return {
+                success: true,
+                message: 'Test mode: Aadhaar and PAN are linked',
+                isLinked: true,
+                data: {
+                    client_id: `test_${Date.now()}`,
+                    masked_pan: cleanPanNumber.substring(0, 2) + 'XXXXXX' + cleanPanNumber.substring(8),
+                    linking_status: true,
+                    reason: "linked",
+                    detailed_reason: null,
+                    link_status: 'Y'
+                }
+            };
+        }
+        
         return {
             success: false,
             error: error.message
