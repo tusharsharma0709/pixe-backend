@@ -1,4 +1,4 @@
-// services/workflowExecutor.js - Complete fixed version for KYC workflow integration
+// services/workflowExecutor.js - Updated for Direct Aadhaar and PAN Verification
 
 const { Message } = require('../models/Messages');
 const { Workflow } = require('../models/Workflows');
@@ -45,6 +45,36 @@ function evaluateCondition(condition, data) {
         
         // Debug condition evaluation
         console.log(`  Evaluating: "${condition}" with data:`, data);
+        
+        // Check for length conditions like string.length == 12
+        const lengthRegex = /(\w+)\.replace\([^)]+\)\.length\s*(==|!=|>|<|>=|<=)\s*(\d+)/;
+        const lengthMatch = condition.match(lengthRegex);
+        
+        if (lengthMatch) {
+            const [, fieldName, operator, expectedLength] = lengthMatch;
+            let fieldValue = data[fieldName];
+            
+            if (fieldValue === undefined || fieldValue === null) {
+                return false;
+            }
+            
+            // If field exists, apply the replace operation mentioned in the condition
+            // This is a simplified implementation - in real code you'd use a safer approach
+            fieldValue = String(fieldValue).replace(/\s+/g, '');  // Assuming replace(/\s+/g, '')
+            const actualLength = fieldValue.length;
+            const expectedLengthNum = parseInt(expectedLength);
+            
+            // Compare lengths based on operator
+            switch (operator) {
+                case '==': return actualLength === expectedLengthNum;
+                case '!=': return actualLength !== expectedLengthNum;
+                case '>': return actualLength > expectedLengthNum;
+                case '<': return actualLength < expectedLengthNum;
+                case '>=': return actualLength >= expectedLengthNum;
+                case '<=': return actualLength <= expectedLengthNum;
+                default: return false;
+            }
+        }
         
         // Check for boolean values directly
         if (condition === 'true') return true;
@@ -466,16 +496,16 @@ async function executeWorkflowNode(session, nodeId) {
                     }
                     
                     // Special handling for KYC verification endpoints
-                    if (node.apiEndpoint === '/api/verification/aadhaar-ocr') {
-                        console.log('  🔍 Special handling for Aadhaar OCR verification');
+                    if (node.apiEndpoint === '/api/verification/aadhaar') {
+                        console.log('  🔍 Special handling for direct Aadhaar verification');
                         
                         try {
                             // Import KYC handlers dynamically to avoid circular dependencies
                             const kycWorkflowHandlers = require('./kycWorkflowHandlers');
                             
-                            // Process Aadhaar OCR
-                            const result = await kycWorkflowHandlers.processAadhaarOCR(session._id);
-                            console.log('  Aadhaar OCR result:', result);
+                            // Process Aadhaar verification
+                            const result = await kycWorkflowHandlers.verifyAadhaar(session._id);
+                            console.log('  Aadhaar verification result:', result);
                             
                             // Store result in session data
                             session.data.aadhaarVerificationResult = result;
@@ -486,7 +516,7 @@ async function executeWorkflowNode(session, nodeId) {
                             session.markModified('data');
                             await session.save();
                         } catch (kycError) {
-                            console.error('Error processing Aadhaar OCR:', kycError);
+                            console.error('Error verifying Aadhaar:', kycError);
                             // Set verification to false on error
                             session.data.isAadhaarVerified = false;
                             session.markModified('data');
@@ -499,16 +529,16 @@ async function executeWorkflowNode(session, nodeId) {
                             throw kycError;
                         }
                     }
-                    else if (node.apiEndpoint === '/api/verification/pan') {
-                        console.log('  🔍 Special handling for PAN verification');
+                    else if (node.apiEndpoint === '/api/verification/pan-validate') {
+                        console.log('  🔍 Special handling for direct PAN verification');
                         
                         try {
                             // Import KYC handlers dynamically to avoid circular dependencies
                             const kycWorkflowHandlers = require('./kycWorkflowHandlers');
                             
-                            // Process PAN OCR
-                            const result = await kycWorkflowHandlers.processPanOCR(session._id);
-                            console.log('  PAN OCR result:', result);
+                            // Process PAN verification
+                            const result = await kycWorkflowHandlers.verifyPAN(session._id);
+                            console.log('  PAN verification result:', result);
                             
                             // Store result in session data
                             session.data.panVerificationResult = result;
@@ -519,7 +549,7 @@ async function executeWorkflowNode(session, nodeId) {
                             session.markModified('data');
                             await session.save();
                         } catch (kycError) {
-                            console.error('Error processing PAN OCR:', kycError);
+                            console.error('Error verifying PAN:', kycError);
                             // Set verification to false on error
                             session.data.isPanVerified = false;
                             session.markModified('data');

@@ -1,14 +1,10 @@
-// services/kycWorkflowHandlers.js
+// services/kycWorkflowHandlers.js - Simplified for direct Aadhaar and PAN verification
+
 const { User } = require('../models/Users');
 const { UserSession } = require('../models/UserSessions');
-const { Message } = require('../models/Messages');
-const { FileUpload } = require('../models/FileUploads');
 const { Verification } = require('../models/Verifications');
 const { ActivityLog } = require('../models/ActivityLogs');
 const surepassServices = require('./surepassServices');
-const axios = require('axios');
-const path = require('path');
-const crypto = require('crypto');
 
 /**
  * Helper function to check if names match
@@ -31,250 +27,63 @@ const doNamesMatch = (dbName, verificationName) => {
 };
 
 /**
- * Extracts the WhatsApp media URL from a message in a session
+ * Format Aadhaar number by removing spaces and other characters
+ * @param {String} aadhaarNumber - The raw Aadhaar number from user input
+ * @returns {String} - Formatted Aadhaar number
+ */
+const formatAadhaarNumber = (aadhaarNumber) => {
+    if (!aadhaarNumber) return '';
+    // Remove all non-digit characters
+    return aadhaarNumber.replace(/\D/g, '');
+};
+
+/**
+ * Format PAN number by removing spaces and converting to uppercase
+ * @param {String} panNumber - The raw PAN number from user input
+ * @returns {String} - Formatted PAN number
+ */
+const formatPanNumber = (panNumber) => {
+    if (!panNumber) return '';
+    // Remove spaces and convert to uppercase
+    return panNumber.replace(/\s+/g, '').toUpperCase();
+};
+
+/**
+ * Verify Aadhaar number
  * @param {String} sessionId - The session ID
- * @param {String} variableName - The variable containing the media message
- * @returns {Promise<Object>} - Media information 
- */
-async function extractMediaFromMessage(sessionId, variableName) {
-    try {
-        console.log(`Extracting media for session ${sessionId}, variable ${variableName}`);
-        
-        // Get the session
-        const session = await UserSession.findById(sessionId);
-        if (!session || !session.data || !session.data[variableName]) {
-            console.error(`No message data found for variable ${variableName}`);
-            throw new Error('Message data not found');
-        }
-        
-        // Get the most recent message in the session
-        const message = await Message.findOne({
-            sessionId,
-            sender: 'user',
-            createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) } // Last 5 minutes
-        }).sort({ createdAt: -1 });
-        
-        if (!message) {
-            console.error('No recent message found for media extraction');
-            throw new Error('No recent message found');
-        }
-        
-        console.log(`Found message: ${message._id}, type: ${message.messageType}`);
-        
-        // If message doesn't have media, throw error
-        if (!message.mediaUrl || message.messageType === 'text') {
-            console.error('Message does not contain media');
-            throw new Error('No media found in message');
-        }
-        
-        // Return media info
-        return {
-            url: message.mediaUrl,
-            type: message.messageType,
-            name: message.mediaName || `${message.messageType}_${Date.now()}`,
-            size: message.mediaSize || 0,
-            messageId: message._id
-        };
-    } catch (error) {
-        console.error('Error extracting media from message:', error);
-        throw error;
-    }
-}
-
-/**
- * Downloads media from a URL
- * @param {String} url - Media URL
- * @returns {Promise<Buffer>} - Media buffer
- */
-async function downloadMedia(url) {
-    try {
-        console.log(`Downloading media from URL: ${url}`);
-        
-        // Get WhatsApp API token from env
-        const token = process.env.WHATSAPP_API_TOKEN;
-        
-        // Download the media
-        const response = await axios.get(url, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            },
-            responseType: 'arraybuffer'
-        });
-        
-        console.log(`Downloaded media: ${response.data.byteLength} bytes`);
-        
-        return response.data;
-    } catch (error) {
-        console.error('Error downloading media:', error);
-        throw error;
-    }
-}
-
-/**
- * Store media as a file upload
- * @param {Buffer} buffer - Media buffer
- * @param {Object} mediaInfo - Media information
- * @param {String} userId - User ID
- * @param {String} entityType - Entity type (e.g., 'verification') 
- * @returns {Promise<Object>} - File upload record
- */
-async function storeMedia(buffer, mediaInfo, userId, entityType = 'verification') {
-    try {
-        console.log(`Storing media for user ${userId}`);
-        
-        // Get admin and firebase from uploaded file controllers
-        const admin = require('firebase-admin');
-        
-        // Initialize Firebase Admin if not already initialized
-        if (!admin.apps.length) {
-            admin.initializeApp({
-                credential: admin.credential.cert({
-                    projectId: process.env.FIREBASE_PROJECT_ID,
-                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
-                }),
-                storageBucket: process.env.FIREBASE_STORAGE_BUCKET
-            });
-        }
-        
-        // Get Firebase Storage bucket
-        const bucket = admin.storage().bucket();
-        
-        // Generate unique filename
-        const fileExt = path.extname(mediaInfo.name) || '.jpg';
-        const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
-        const filePath = `uploads/${new Date().getFullYear()}/${new Date().getMonth() + 1}/${filename}`;
-        
-        // Determine MIME type
-        let mimeType;
-        switch (mediaInfo.type) {
-            case 'image':
-                mimeType = 'image/jpeg';
-                break;
-            case 'document':
-                mimeType = 'application/pdf';
-                break;
-            default:
-                mimeType = 'application/octet-stream';
-        }
-        
-        // Create a file in Firebase Storage
-        const fileRef = bucket.file(filePath);
-        
-        // Upload file to Firebase Storage
-        await fileRef.save(buffer, {
-            metadata: {
-                contentType: mimeType,
-                originalName: mediaInfo.name
-            },
-            public: false,
-            resumable: false
-        });
-        
-        // Generate signed URL for the file
-        const [signedUrl] = await fileRef.getSignedUrl({
-            action: 'read',
-            expires: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
-        });
-        
-        // Create file upload record
-        const fileUpload = new FileUpload({
-            filename,
-            originalFilename: mediaInfo.name,
-            path: filePath,
-            url: signedUrl,
-            mimeType,
-            size: buffer.length,
-            uploadedBy: {
-                id: userId,
-                role: 'user'
-            },
-            userId,
-            entityType,
-            status: 'permanent',
-            isPublic: false,
-            bucket: bucket.name,
-            storageProvider: 'google_cloud',
-            storageMetadata: {
-                firebasePath: filePath
-            },
-            isScanRequired: true
-        });
-        
-        await fileUpload.save();
-        console.log(`File upload created: ${fileUpload._id}`);
-        
-        return fileUpload;
-    } catch (error) {
-        console.error('Error storing media:', error);
-        throw error;
-    }
-}
-
-/**
- * Processes Aadhaar OCR for a user session
- * @param {String} sessionId - The user session ID
  * @returns {Promise<Object>} - Verification result
  */
-async function processAadhaarOCR(sessionId) {
+async function verifyAadhaar(sessionId) {
     try {
-        console.log(`Processing Aadhaar OCR for session ${sessionId}`);
+        console.log(`Verifying Aadhaar for session ${sessionId}`);
         
-        // Get session
-        const session = await UserSession.findById(sessionId).populate('userId');
-        if (!session) {
-            throw new Error('Session not found');
+        // Get session data
+        const session = await UserSession.findById(sessionId);
+        if (!session || !session.data) {
+            throw new Error('Session or session data not found');
         }
         
-        // Extract the media URLs from the messages
-        const frontMedia = await extractMediaFromMessage(sessionId, 'aadhaar_front_message');
-        const backMedia = await extractMediaFromMessage(sessionId, 'aadhaar_back_message');
-        
-        console.log('Front media URL:', frontMedia.url);
-        console.log('Back media URL:', backMedia.url);
-        
-        // Download the media
-        const frontBuffer = await downloadMedia(frontMedia.url);
-        const backBuffer = await downloadMedia(backMedia.url);
-        
-        // Store the media
-        const frontFile = await storeMedia(frontBuffer, frontMedia, session.userId, 'verification');
-        const backFile = await storeMedia(backBuffer, backMedia, session.userId, 'verification');
-        
-        // Process with SurePass OCR
-        const frontOcrResult = await surepassServices.processAadhaarOCR(frontBuffer);
-        const backOcrResult = await surepassServices.processAadhaarOCR(backBuffer);
-        
-        console.log('Front OCR result:', JSON.stringify(frontOcrResult));
-        console.log('Back OCR result:', JSON.stringify(backOcrResult));
-        
-        // Extract Aadhaar number and name
-        let aadhaarNumber = null;
-        let aadhaarName = null;
-        
-        if (frontOcrResult && 
-            frontOcrResult.ocr_fields && 
-            frontOcrResult.ocr_fields.length > 0) {
-            
-            const fields = frontOcrResult.ocr_fields[0];
-            
-            if (fields.aadhaar_number) {
-                aadhaarNumber = fields.aadhaar_number.value;
-            }
-            
-            if (fields.full_name) {
-                aadhaarName = fields.full_name.value;
-            }
-        }
-        
-        // Check name match with submitted name
-        const dbName = session.data.full_name || '';
-        const namesMatch = !dbName || doNamesMatch(dbName, aadhaarName);
-        
-        // Get user
+        // Get user info
         const user = await User.findById(session.userId);
+        if (!user) {
+            throw new Error('User not found');
+        }
         
-        // Create verification record
+        // Get Aadhaar number from session data and format it
+        const rawAadhaarNumber = session.data.aadhaar_number;
+        if (!rawAadhaarNumber) {
+            throw new Error('Aadhaar number not found in session data');
+        }
+        
+        const aadhaarNumber = formatAadhaarNumber(rawAadhaarNumber);
+        if (aadhaarNumber.length !== 12) {
+            throw new Error('Invalid Aadhaar number format');
+        }
+        
+        // Get name from session or user data
+        const name = session.data.full_name || user.name;
+        
+        // Create or update verification record
         let verification = await Verification.findOne({
             userId: session.userId,
             verificationType: 'aadhaar'
@@ -287,52 +96,59 @@ async function processAadhaarOCR(sessionId) {
                 mode: 'auto',
                 provider: 'surepass',
                 status: 'in_progress',
-                documents: [
-                    {
-                        type: 'aadhaar_front',
-                        url: frontFile.url,
-                        status: 'pending'
-                    },
-                    {
-                        type: 'aadhaar_back',
-                        url: backFile.url,
-                        status: 'pending'
-                    }
-                ]
+                verificationDetails: {
+                    aadhaarNumber
+                }
             });
         } else {
-            // Update existing verification
             verification.status = 'in_progress';
-            verification.documents.push(
-                {
-                    type: 'aadhaar_front',
-                    url: frontFile.url,
-                    status: 'pending'
-                },
-                {
-                    type: 'aadhaar_back',
-                    url: backFile.url,
-                    status: 'pending'
-                }
-            );
+            verification.verificationDetails = {
+                ...(verification.verificationDetails || {}),
+                aadhaarNumber
+            };
         }
         
-        // Process verification results
-        if (aadhaarNumber && aadhaarName) {
-            // Update verification with successful results
+        await verification.save();
+        
+        // Call SurePass API to verify Aadhaar
+        const result = await surepassServices.verifyAadhaar(aadhaarNumber, 'Y');
+        console.log('Aadhaar verification API result:', result);
+        
+        // Process verification result
+        if (result && result.success) {
+            // Extract verification data
+            const aadhaarName = result.data?.name_on_card || result.data?.name;
+            
+            // Check name match if name is available
+            const namesMatch = !name || !aadhaarName || doNamesMatch(name, aadhaarName);
+            
+            if (!namesMatch) {
+                // Name mismatch
+                verification.status = 'failed';
+                verification.verificationAttempts.push({
+                    attemptedAt: new Date(),
+                    status: 'failure',
+                    reason: 'Name mismatch',
+                    data: {
+                        providedName: name,
+                        aadhaarName
+                    }
+                });
+                await verification.save();
+                
+                return {
+                    success: false,
+                    message: 'The name provided does not match the name registered with this Aadhaar number'
+                };
+            }
+            
+            // Update verification record with success
             verification.status = 'completed';
             verification.verificationDetails = {
-                aadhaarNumber,
-                aadhaarName,
-                nameMatch: {
-                    status: namesMatch,
-                    score: namesMatch ? 100 : 0
-                }
+                ...verification.verificationDetails,
+                aadhaarName
             };
-            verification.responseData = {
-                front: frontOcrResult,
-                back: backOcrResult
-            };
+            verification.responseData = result.data;
             verification.completedAt = new Date();
             verification.verificationAttempts.push({
                 attemptedAt: new Date(),
@@ -340,13 +156,6 @@ async function processAadhaarOCR(sessionId) {
                 data: {
                     aadhaarNumber,
                     aadhaarName
-                }
-            });
-            
-            // Update document status
-            verification.documents.forEach(doc => {
-                if (doc.type === 'aadhaar_front' || doc.type === 'aadhaar_back') {
-                    doc.status = 'approved';
                 }
             });
             
@@ -359,11 +168,10 @@ async function processAadhaarOCR(sessionId) {
             // Update session data
             session.data.isAadhaarVerified = true;
             session.data.aadhaarName = aadhaarName;
-            session.data.aadhaarNumber = aadhaarNumber;
             session.markModified('data');
             await session.save();
             
-            // Create activity log
+            // Log activity
             await ActivityLog.create({
                 actorId: user._id,
                 actorModel: 'Users',
@@ -382,17 +190,17 @@ async function processAadhaarOCR(sessionId) {
             // Return success
             return {
                 success: true,
-                aadhaarName,
-                aadhaarNumber: aadhaarNumber ? aadhaarNumber.substring(0, 4) + ' XXXX XXXX' : null,
-                isVerified: true
+                message: 'Aadhaar number verified successfully',
+                aadhaarName
             };
         } else {
-            // Handle verification failure
+            // Handle failed verification
             verification.status = 'failed';
             verification.verificationAttempts.push({
                 attemptedAt: new Date(),
                 status: 'failure',
-                reason: 'Could not extract Aadhaar details from images'
+                reason: result?.error || 'Verification failed',
+                data: result
             });
             await verification.save();
             
@@ -403,82 +211,54 @@ async function processAadhaarOCR(sessionId) {
             
             return {
                 success: false,
-                message: 'Could not extract Aadhaar details from images'
+                message: result?.error || 'Aadhaar verification failed'
             };
         }
     } catch (error) {
-        console.error('Error processing Aadhaar OCR:', error);
+        console.error('Error verifying Aadhaar:', error);
         return {
             success: false,
-            message: error.message || 'Error processing Aadhaar OCR'
+            message: error.message || 'Error verifying Aadhaar'
         };
     }
 }
 
 /**
- * Processes PAN OCR for a user session
- * @param {String} sessionId - The user session ID
+ * Verify PAN number
+ * @param {String} sessionId - The session ID
  * @returns {Promise<Object>} - Verification result
  */
-async function processPanOCR(sessionId) {
+async function verifyPAN(sessionId) {
     try {
-        console.log(`Processing PAN OCR for session ${sessionId}`);
+        console.log(`Verifying PAN for session ${sessionId}`);
         
-        // Get session
-        const session = await UserSession.findById(sessionId).populate('userId');
-        if (!session) {
-            throw new Error('Session not found');
+        // Get session data
+        const session = await UserSession.findById(sessionId);
+        if (!session || !session.data) {
+            throw new Error('Session or session data not found');
         }
         
-        // Get user
+        // Get user info
         const user = await User.findById(session.userId);
         if (!user) {
             throw new Error('User not found');
         }
         
-        // Check if Aadhaar is verified first
-        if (!user.isAadhaarVerified) {
-            throw new Error('Aadhaar verification must be completed first');
+        // Get PAN number from session data and format it
+        const rawPanNumber = session.data.pan_number;
+        if (!rawPanNumber) {
+            throw new Error('PAN number not found in session data');
         }
         
-        // Extract the media URL from the message
-        const panMedia = await extractMediaFromMessage(sessionId, 'pan_message');
-        console.log('PAN media URL:', panMedia.url);
-        
-        // Download the media
-        const panBuffer = await downloadMedia(panMedia.url);
-        
-        // Store the media
-        const panFile = await storeMedia(panBuffer, panMedia, session.userId, 'verification');
-        
-        // Process with SurePass OCR
-        const panOcrResult = await surepassServices.processPANOCR(panBuffer);
-        console.log('PAN OCR result:', JSON.stringify(panOcrResult));
-        
-        // Extract PAN number and name
-        let panNumber = null;
-        let panName = null;
-        
-        if (panOcrResult && 
-            panOcrResult.ocr_fields && 
-            panOcrResult.ocr_fields.length > 0) {
-            
-            const fields = panOcrResult.ocr_fields[0];
-            
-            if (fields.pan_number) {
-                panNumber = fields.pan_number.value;
-            }
-            
-            if (fields.full_name) {
-                panName = fields.full_name.value;
-            }
+        const panNumber = formatPanNumber(rawPanNumber);
+        if (panNumber.length !== 10) {
+            throw new Error('Invalid PAN number format');
         }
         
-        // Check name match with submitted name
-        const dbName = session.data.full_name || user.name || '';
-        const namesMatch = !dbName || doNamesMatch(dbName, panName);
+        // Get name from session or user data
+        const name = session.data.full_name || user.name;
         
-        // Create verification record
+        // Create or update verification record
         let verification = await Verification.findOne({
             userId: session.userId,
             verificationType: 'pan'
@@ -491,37 +271,59 @@ async function processPanOCR(sessionId) {
                 mode: 'auto',
                 provider: 'surepass',
                 status: 'in_progress',
-                documents: [
-                    {
-                        type: 'pan',
-                        url: panFile.url,
-                        status: 'pending'
-                    }
-                ]
+                verificationDetails: {
+                    panNumber
+                }
             });
         } else {
-            // Update existing verification
             verification.status = 'in_progress';
-            verification.documents.push({
-                type: 'pan',
-                url: panFile.url,
-                status: 'pending'
-            });
+            verification.verificationDetails = {
+                ...(verification.verificationDetails || {}),
+                panNumber
+            };
         }
         
-        // Process verification results
-        if (panNumber && panName) {
-            // Update verification with successful results
+        await verification.save();
+        
+        // Call SurePass API to verify PAN
+        const result = await surepassServices.verifyPAN(panNumber, 'Y');
+        console.log('PAN verification API result:', result);
+        
+        // Process verification result
+        if (result && result.success) {
+            // Extract verification data
+            const panName = result.data?.name_on_card || result.data?.name;
+            
+            // Check name match if name is available
+            const namesMatch = !name || !panName || doNamesMatch(name, panName);
+            
+            if (!namesMatch) {
+                // Name mismatch
+                verification.status = 'failed';
+                verification.verificationAttempts.push({
+                    attemptedAt: new Date(),
+                    status: 'failure',
+                    reason: 'Name mismatch',
+                    data: {
+                        providedName: name,
+                        panName
+                    }
+                });
+                await verification.save();
+                
+                return {
+                    success: false,
+                    message: 'The name provided does not match the name registered with this PAN'
+                };
+            }
+            
+            // Update verification record with success
             verification.status = 'completed';
             verification.verificationDetails = {
-                panNumber,
-                panName,
-                nameMatch: {
-                    status: namesMatch,
-                    score: namesMatch ? 100 : 0
-                }
+                ...verification.verificationDetails,
+                panName
             };
-            verification.responseData = panOcrResult;
+            verification.responseData = result.data;
             verification.completedAt = new Date();
             verification.verificationAttempts.push({
                 attemptedAt: new Date(),
@@ -529,13 +331,6 @@ async function processPanOCR(sessionId) {
                 data: {
                     panNumber,
                     panName
-                }
-            });
-            
-            // Update document status
-            verification.documents.forEach(doc => {
-                if (doc.type === 'pan') {
-                    doc.status = 'approved';
                 }
             });
             
@@ -548,11 +343,10 @@ async function processPanOCR(sessionId) {
             // Update session data
             session.data.isPanVerified = true;
             session.data.panName = panName;
-            session.data.panNumber = panNumber;
             session.markModified('data');
             await session.save();
             
-            // Create activity log
+            // Log activity
             await ActivityLog.create({
                 actorId: user._id,
                 actorModel: 'Users',
@@ -571,17 +365,17 @@ async function processPanOCR(sessionId) {
             // Return success
             return {
                 success: true,
-                panName,
-                panNumber: panNumber ? panNumber.substring(0, 2) + 'XXXXX' + panNumber.substring(7) : null,
-                isVerified: true
+                message: 'PAN verified successfully',
+                panName
             };
         } else {
-            // Handle verification failure
+            // Handle failed verification
             verification.status = 'failed';
             verification.verificationAttempts.push({
                 attemptedAt: new Date(),
                 status: 'failure',
-                reason: 'Could not extract PAN details from image'
+                reason: result?.error || 'Verification failed',
+                data: result
             });
             await verification.save();
             
@@ -592,20 +386,20 @@ async function processPanOCR(sessionId) {
             
             return {
                 success: false,
-                message: 'Could not extract PAN details from image'
+                message: result?.error || 'PAN verification failed'
             };
         }
     } catch (error) {
-        console.error('Error processing PAN OCR:', error);
+        console.error('Error verifying PAN:', error);
         return {
             success: false,
-            message: error.message || 'Error processing PAN OCR'
+            message: error.message || 'Error verifying PAN'
         };
     }
 }
 
 /**
- * Checks if Aadhaar and PAN are linked
+ * Check if Aadhaar and PAN are linked
  * @param {String} sessionId - The user session ID
  * @returns {Promise<Object>} - Verification result
  */
@@ -614,9 +408,9 @@ async function checkAadhaarPanLink(sessionId) {
         console.log(`Checking Aadhaar-PAN link for session ${sessionId}`);
         
         // Get session
-        const session = await UserSession.findById(sessionId).populate('userId');
-        if (!session) {
-            throw new Error('Session not found');
+        const session = await UserSession.findById(sessionId);
+        if (!session || !session.data) {
+            throw new Error('Session or session data not found');
         }
         
         // Get user
@@ -625,42 +419,18 @@ async function checkAadhaarPanLink(sessionId) {
             throw new Error('User not found');
         }
         
-        // Check if Aadhaar and PAN are verified
-        if (!user.isAadhaarVerified) {
-            throw new Error('Aadhaar verification must be completed first');
+        // Get Aadhaar and PAN numbers from session data
+        const rawAadhaarNumber = session.data.aadhaar_number;
+        const rawPanNumber = session.data.pan_number;
+        
+        if (!rawAadhaarNumber || !rawPanNumber) {
+            throw new Error('Aadhaar or PAN number not found in session data');
         }
         
-        if (!user.isPanVerified) {
-            throw new Error('PAN verification must be completed first');
-        }
+        const aadhaarNumber = formatAadhaarNumber(rawAadhaarNumber);
+        const panNumber = formatPanNumber(rawPanNumber);
         
-        // Get verification records
-        const aadhaarVerification = await Verification.findOne({ 
-            userId: user._id, 
-            verificationType: 'aadhaar',
-            status: 'completed'
-        });
-        
-        const panVerification = await Verification.findOne({ 
-            userId: user._id, 
-            verificationType: 'pan',
-            status: 'completed'
-        });
-        
-        if (!aadhaarVerification || !panVerification) {
-            throw new Error('Verification records not found');
-        }
-        
-        // Check if Aadhaar number and PAN number are present
-        if (!aadhaarVerification.verificationDetails?.aadhaarNumber) {
-            throw new Error('Aadhaar number is missing in verification records');
-        }
-        
-        if (!panVerification.verificationDetails?.panNumber) {
-            throw new Error('PAN number is missing in verification records');
-        }
-        
-        // Create a new verification record for Aadhaar-PAN link
+        // Create or update verification record for Aadhaar-PAN link
         let linkVerification = await Verification.findOne({ 
             userId: user._id, 
             verificationType: 'aadhaar_pan_link'
@@ -681,14 +451,11 @@ async function checkAadhaarPanLink(sessionId) {
         await linkVerification.save();
         
         // Call SurePass API to check if Aadhaar and PAN are linked
-        const result = await surepassServices.checkAadhaarPANLink(
-            aadhaarVerification.verificationDetails.aadhaarNumber,
-            panVerification.verificationDetails.panNumber,
-            'Y'
-        );
+        const result = await surepassServices.checkAadhaarPANLink(aadhaarNumber, panNumber, 'Y');
+        console.log('Aadhaar-PAN Link API result:', result);
         
         // Process API response
-        if (result && result.data && result.data.link_status) {
+        if (result && result.success && result.data && result.data.link_status) {
             // Update verification with successful results
             linkVerification.status = 'completed';
             linkVerification.responseData = result.data;
@@ -760,7 +527,7 @@ async function checkAadhaarPanLink(sessionId) {
 }
 
 module.exports = {
-    processAadhaarOCR,
-    processPanOCR,
+    verifyAadhaar,
+    verifyPAN,
     checkAadhaarPanLink
 };
