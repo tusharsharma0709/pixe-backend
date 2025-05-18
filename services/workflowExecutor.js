@@ -1,4 +1,5 @@
-// services/workflowExecutor.js
+// Part 1: services/workflowExecutor.js - Updated with KYC processing
+
 const { Message } = require('../models/Messages');
 const { Workflow } = require('../models/Workflows');
 const { UserSession } = require('../models/UserSessions');
@@ -7,6 +8,9 @@ const { Verification } = require('../models/Verifications');
 const whatsappService = require('./whatsappServices');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
+
+// Import KYC Handlers - This will be created in a separate file
+// const kycWorkflowHandlers = require('./kycWorkflowHandlers');
 
 // Store recently processed message IDs to prevent duplicate processing
 const recentProcessedMessages = new Map();
@@ -116,6 +120,8 @@ async function processWorkflowInput(session, input, messageId = null) {
         }
     }
 }
+
+// Part 2: services/workflowExecutor.js - The executeWorkflowNode function
 
 /**
  * Execute a workflow node
@@ -285,7 +291,8 @@ async function executeWorkflowNode(session, nodeId) {
                 
                 console.log(`⏸️ Input node - waiting for variable: ${node.variableName}`);
                 break;
-                
+                // Part 3: services/workflowExecutor.js - API handling and KYC implementation
+
             case 'condition':
                 console.log(`  Evaluating condition: ${node.condition}`);
                 
@@ -362,8 +369,56 @@ async function executeWorkflowNode(session, nodeId) {
                         session.data = {};
                     }
                     
-                    // Special handling for verification status API
-                    if (node.apiEndpoint === '/api/verification/status') {
+                    // Special handling for KYC verification endpoints
+                    if (node.apiEndpoint === '/api/verification/aadhaar-ocr') {
+                        console.log('  🔍 Special handling for Aadhaar OCR verification');
+                        
+                        // Import KYC handlers dynamically to avoid circular dependencies
+                        const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                        
+                        // Process Aadhaar OCR
+                        const result = await kycWorkflowHandlers.processAadhaarOCR(session._id);
+                        console.log('  Aadhaar OCR result:', result);
+                        
+                        // Store result in session data
+                        session.data.aadhaarVerificationResult = result;
+                        session.data.isAadhaarVerified = result.success;
+                        session.markModified('data');
+                        await session.save();
+                    }
+                    else if (node.apiEndpoint === '/api/verification/pan') {
+                        console.log('  🔍 Special handling for PAN verification');
+                        
+                        // Import KYC handlers dynamically to avoid circular dependencies
+                        const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                        
+                        // Process PAN OCR
+                        const result = await kycWorkflowHandlers.processPanOCR(session._id);
+                        console.log('  PAN OCR result:', result);
+                        
+                        // Store result in session data
+                        session.data.panVerificationResult = result;
+                        session.data.isPanVerified = result.success;
+                        session.markModified('data');
+                        await session.save();
+                    }
+                    else if (node.apiEndpoint === '/api/verification/aadhaar-pan-link') {
+                        console.log('  🔍 Special handling for Aadhaar-PAN linking check');
+                        
+                        // Import KYC handlers dynamically to avoid circular dependencies
+                        const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                        
+                        // Check Aadhaar-PAN link
+                        const result = await kycWorkflowHandlers.checkAadhaarPanLink(session._id);
+                        console.log('  Aadhaar-PAN link result:', result);
+                        
+                        // Store result in session data
+                        session.data.aadhaarPanLinkResult = result;
+                        session.data.isAadhaarPanLinked = result.success && result.isLinked;
+                        session.markModified('data');
+                        await session.save();
+                    }
+                    else if (node.apiEndpoint === '/api/verification/status') {
                         console.log('  Special handling for verification status API');
                         
                         // Get user from database
@@ -529,34 +584,8 @@ async function executeWorkflowNode(session, nodeId) {
     }
 }
 
-/**
- * Track node execution count to prevent infinite loops
- * @param {String} key - The session:nodeId key
- * @returns {Number} The current execution count
- */
-function incrementNodeExecutionCount(key) {
-    const count = nodeExecutionCounts.get(key) || 0;
-    nodeExecutionCounts.set(key, count + 1);
-    
-    // Auto cleanup - remove counts older than 1 hour
-    setTimeout(() => {
-        nodeExecutionCounts.delete(key);
-    }, 3600000);
-    
-    return count + 1;
-}
+// Part 4: services/workflowExecutor.js - Helper functions and module exports (continued)
 
-/**
- * Reset the execution count for a node
- * @param {String} sessionId - The session ID
- * @param {String} nodeId - The node ID
- */
-function resetNodeExecutionCount(sessionId, nodeId) {
-    const key = `${sessionId}:${nodeId}`;
-    nodeExecutionCounts.delete(key);
-}
-
-// Evaluate conditions for decision nodes
 function evaluateCondition(condition, data) {
     try {
         if (!condition) return false;
@@ -603,46 +632,13 @@ function evaluateCondition(condition, data) {
             return fieldValue && fieldValue.includes(searchValue);
         }
         
-        // Check for nested property access (object.property)
-        const nestedRegex = /(\w+)\.(\w+)\s*(>|<|>=|<=|==|!=)\s*([\w"']+)/;
-        const nestedMatch = condition.match(nestedRegex);
+        // Check for boolean values directly
+        if (condition === 'true') return true;
+        if (condition === 'false') return false;
         
-        if (nestedMatch) {
-            const [, objName, propName, operator, valueStr] = nestedMatch;
-            
-            // Check if the object exists
-            if (!data[objName] || typeof data[objName] !== 'object') {
-                console.log(`  Object ${objName} not found in data or not an object`);
-                return false;
-            }
-            
-            const fieldValue = data[objName][propName];
-            console.log(`  Nested property lookup: ${objName}.${propName} = `, fieldValue);
-            
-            // Parse the comparison value
-            let value;
-            if (valueStr.startsWith('"') || valueStr.startsWith("'")) {
-                value = valueStr.substring(1, valueStr.length - 1);
-            } else if (valueStr === 'true') {
-                value = true;
-            } else if (valueStr === 'false') {
-                value = false;
-            } else if (!isNaN(Number(valueStr))) {
-                value = Number(valueStr);
-            } else {
-                value = data[valueStr]; // It might be another variable reference
-            }
-            
-            // Perform the comparison
-            switch (operator) {
-                case '>': return fieldValue > value;
-                case '<': return fieldValue < value;
-                case '>=': return fieldValue >= value;
-                case '<=': return fieldValue <= value;
-                case '==': return fieldValue == value; // Loose equality
-                case '!=': return fieldValue != value; // Loose inequality
-                default: return false;
-            }
+        // Check if we're testing a direct boolean property
+        if (data[condition] !== undefined) {
+            return Boolean(data[condition]);
         }
         
         // Check for direct comparison operators
@@ -722,8 +718,7 @@ function generateSessionToken(session) {
                 sessionId: session._id,
                 workflowId: session.workflowId
             },
-            process.env.JWT_SECRET || 'workflow_jwt_secret',
-            { expiresIn: '1h' }
+            process.env.JWT_SECRET || 'workflow_jwt_secret'
         );
     } catch (error) {
         console.error('Error generating session token:', error);
