@@ -261,10 +261,9 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
         
         // Make API call to SurePass
         // IMPORTANT: Using 'id_number' instead of 'pan' based on API errors
-        const result = await postJSON('/pan-aadhaar-link/pan-link-status', {
-            id_number: cleanAadhaarNumber,
-            consent,
-            pan_number: cleanPanNumber
+        const result = await postJSON('/pan/aadhaar-pan-link-check', {
+            aadhaar_number: cleanAadhaarNumber,
+            consent
         });
         
         // Add isLinked flag for easier access
