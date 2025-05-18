@@ -23,14 +23,9 @@ router.patch('/:id/read', adminOrAgentAuth, MessageController.markAsRead);
 router.post('/webhook/receive', MessageController.receiveMessage);
 
 // Add GET route for webhook verification
-router.get('/webhook/receive', (req, res, next) => {
-    // Log request details for debugging
-    console.log('Webhook verification GET request received');
-    console.log('Original URL:', req.originalUrl);
-    console.log('Query parameters:', req.query);
-    
+router.get('/webhook/receive', 
     // Pass to controller
-    MessageController.verifyWebhook(req, res);
-});
+    MessageController.verifyWebhook
+);
 
 module.exports = router;

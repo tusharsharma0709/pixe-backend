@@ -3,7 +3,11 @@
 const { Message } = require('../models/Messages');
 const { Workflow } = require('../models/Workflows');
 const { UserSession } = require('../models/UserSessions');
+const { User } = require('../models/Users');
+const { Verification } = require('../models/Verifications');
 const whatsappService = require('./whatsappServices');
+const axios = require('axios');
+const jwt = require('jsonwebtoken');
 
 // services/workflowExecutor.js - Fix the processWorkflowInput function
 
@@ -36,6 +40,11 @@ async function processWorkflowInput(session, input) {
             if (!variableName) {
                 console.error('❌ No variable name defined for input node');
                 return;
+            }
+            
+            // Initialize data object if needed
+            if (!session.data) {
+                session.data = {};
             }
             
             // Save the user's input to the session data
@@ -237,6 +246,148 @@ async function executeWorkflowNode(session, nodeId) {
                     console.error(`❌ No ${conditionResult ? 'true' : 'false'} node defined for condition`);
                 }
                 break;
+            
+            case 'api':
+                console.log(`  Executing API node: ${node.apiEndpoint}`);
+                
+                try {
+                    // Initialize session data if needed
+                    if (!session.data) {
+                        session.data = {};
+                    }
+                    
+                    // Special handling for verification status API
+                    if (node.apiEndpoint === '/api/verification/status') {
+                        console.log('  Special handling for verification status API');
+                        
+                        // Get user from database
+                        const user = await User.findById(session.userId);
+                        if (!user) {
+                            console.error(`❌ User not found: ${session.userId}`);
+                            throw new Error('User not found');
+                        }
+                        
+                        // Get verification status directly from database
+                        const verificationStatus = {
+                            isAadhaarVerified: user.isAadhaarVerified || false,
+                            isAadhaarValidated: user.isAadhaarValidated || false,
+                            isPanVerified: user.isPanVerified || false,
+                            verifications: {}
+                        };
+                        
+                        // Get verification details
+                        const verifications = await Verification.find({ userId: user._id });
+                        
+                        // Map verifications to expected format
+                        for (const verification of verifications) {
+                            verificationStatus.verifications[verification.verificationType] = {
+                                status: verification.status,
+                                isVerified: verification.status === 'completed',
+                                completedAt: verification.completedAt
+                            };
+                        }
+                        
+                        // Add to session data
+                        session.data = {
+                            ...session.data,
+                            ...verificationStatus
+                        };
+                        
+                        console.log(`✅ Retrieved verification status directly`, verificationStatus);
+                    } else {
+                        // For other APIs, make actual HTTP call
+                        
+                        // Replace variables in API params
+                        const params = {};
+                        if (node.apiParams) {
+                            for (const [key, value] of Object.entries(node.apiParams)) {
+                                if (typeof value === 'string' && value.includes('{{')) {
+                                    // Replace placeholders with values from session data
+                                    let paramValue = value;
+                                    for (const [dataKey, dataValue] of Object.entries(session.data || {})) {
+                                        if (dataValue !== undefined && dataValue !== null) {
+                                            const regex = new RegExp(`{{\\s*${dataKey}\\s*}}`, 'g');
+                                            paramValue = paramValue.replace(regex, dataValue);
+                                        }
+                                    }
+                                    params[key] = paramValue;
+                                } else {
+                                    params[key] = value;
+                                }
+                            }
+                        }
+                        
+                        console.log(`  API params:`, params);
+                        
+                        // Get API base URL from env or use default
+                        const apiBaseUrl = process.env.API_BASE_URL || '';
+                        
+                        // Generate auth token for API call
+                        const token = generateSessionToken(session);
+                        
+                        // Make the API call
+                        const apiResponse = await axios({
+                            method: node.apiMethod || 'GET',
+                            url: `${apiBaseUrl}${node.apiEndpoint}`,
+                            data: node.apiMethod === 'GET' ? undefined : params,
+                            params: node.apiMethod === 'GET' ? params : undefined,
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                            }
+                        });
+                        
+                        console.log(`✅ API call successful: ${node.apiEndpoint}`);
+                        
+                        // Store API response in session data
+                        if (apiResponse.data && apiResponse.data.data) {
+                            session.data = {
+                                ...session.data,
+                                ...apiResponse.data.data
+                            };
+                        }
+                    }
+                    
+                    // Save session with updated data
+                    session.markModified('data');
+                    await session.save();
+                    
+                    // Move to next node if defined
+                    if (node.nextNodeId) {
+                        console.log(`⏭️ Moving to next node: ${node.nextNodeId}`);
+                        await executeWorkflowNode(session, node.nextNodeId);
+                    } else {
+                        console.log(`⚠️ No next node defined for API node ${node.nodeId}`);
+                    }
+                } catch (error) {
+                    console.error(`❌ Error executing API node:`, error.message);
+                    
+                    // Store error in session data
+                    if (!session.data) {
+                        session.data = {};
+                    }
+                    
+                    session.data.apiError = error.message;
+                    session.data.apiErrorCode = error.response?.status || 500;
+                    session.markModified('data');
+                    await session.save();
+                    
+                    // Go to error node if defined
+                    if (node.errorNodeId) {
+                        console.log(`⏭️ Moving to error node: ${node.errorNodeId}`);
+                        await executeWorkflowNode(session, node.errorNodeId);
+                    }
+                }
+                break;
+                
+            case 'end':
+                console.log(`  Reached end node`);
+                // Mark session as completed
+                session.status = 'completed';
+                session.completedAt = new Date();
+                await session.save();
+                console.log(`✅ Workflow completed`);
+                break;
                 
             default:
                 console.log(`⚠️ Unsupported node type: ${node.type}`);
@@ -325,10 +476,54 @@ function evaluateCondition(condition, data) {
             }
         }
         
+        // Complex conditions (mostly for objects and nested properties)
+        if (condition.includes('&&') || condition.includes('||')) {
+            try {
+                // Safety check if data is missing
+                if (!data) return false;
+                
+                // Create safe evaluation context
+                const context = { ...data };
+                
+                // Create and execute function to evaluate condition
+                const evalFunction = new Function(
+                    ...Object.keys(context),
+                    `try { return ${condition}; } catch (e) { return false; }`
+                );
+                
+                return evalFunction(...Object.values(context));
+            } catch (e) {
+                console.error('Error evaluating complex condition:', e);
+                return false;
+            }
+        }
+        
         return false;
     } catch (error) {
         console.error('Error evaluating condition:', error);
         return false;
+    }
+}
+
+/**
+ * Generate a token for API calls
+ * @param {Object} session - User session
+ * @returns {String} JWT token
+ */
+function generateSessionToken(session) {
+    try {
+        return jwt.sign(
+            { 
+                userId: session.userId,
+                sessionId: session._id,
+                workflowId: session.workflowId
+            },
+            process.env.JWT_SECRET || 'workflow_jwt_secret',
+            { expiresIn: '1h' }
+        );
+    } catch (error) {
+        console.error('Error generating session token:', error);
+        return '';
     }
 }
 

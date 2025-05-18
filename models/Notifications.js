@@ -39,7 +39,8 @@ const notificationSchema = new mongoose.Schema({
             'message',                 // New message received
             'agent_performance',       // Agent performance update
             'payment',                 // Payment notification
-            'verification'             // Verification completed
+            'verification',            // Verification completed
+            'session_started'          // New session started
         ],
         required: true
     },
@@ -70,7 +71,17 @@ const notificationSchema = new mongoose.Schema({
     relatedTo: {
         model: {
             type: String,
-            enum: ['Admin', 'Campaign', 'CampaignRequest', 'Product', 'ProductRequest', 'User', 'Workflow', 'Agent'], // Added 'ProductRequest'
+            enum: [
+                'Admin', 
+                'Campaign', 
+                'CampaignRequest', 
+                'Product', 
+                'ProductRequest', 
+                'User', 
+                'Workflow', 
+                'Agent', 
+                'UserSession'  // Added UserSession
+            ],
             default: null
         },
         id: {

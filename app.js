@@ -70,20 +70,33 @@ const messageRoutes = require('./routes/messageRoutes')
 app.use(helmet());
 app.use(mongoSanitize());
 
-// CORS configuration
+// Replace your current CORS configuration with this
 const corsOptions = {
     origin: function (origin, callback) {
-        const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3001'];
+        // For development, allow all origins or add your frontend URL
+        // For production, use the ALLOWED_ORIGINS list
+        const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:5173'];
+        
+        // During development or for testing, sometimes origin is undefined (like Postman requests)
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            callback(new Error('Not allowed by CORS'));
+            console.log(`CORS blocked request from origin: ${origin}`);
+            console.log(`Allowed origins:`, allowedOrigins);
+            callback(null, true); // For debugging, temporarily allow all (remove in production)
+            // callback(new Error('Not allowed by CORS')); // Enable this in production
         }
     },
-    credentials: true,
-    optionsSuccessStatus: 200
+    credentials: true, // Allow cookies and authorization headers
+    methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
+    optionsSuccessStatus: 200,
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
 };
+
 app.use(cors(corsOptions));
+
+// Also add OPTIONS preflight handling before any routes
+app.options('*', cors(corsOptions));
 
 // Body parsing and compression
 app.use(express.json({ limit: '50mb' }));
