@@ -211,7 +211,7 @@ const verifyPAN = async (panNumber, consent = 'Y') => {
  * @param {String} consent - Consent flag (Y/N)
  * @returns {Promise} - API response
  */
-const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
+const checkAadhaarPANLink = async (aadhaarNumber, consent = 'Y') => {
     try {
         // Validate inputs first
         if (!aadhaarNumber) {
@@ -222,19 +222,9 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
                 isLinked: false
             };
         }
-
-        if (!panNumber) {
-            console.error('PAN number is required');
-            return {
-                success: false,
-                error: 'PAN number is required',
-                isLinked: false
-            };
-        }
         
         // Clean the numbers - only after confirming they exist
         const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
-        const cleanPanNumber = panNumber.replace(/\s/g, '').toUpperCase();
         
         // Log the API call (without showing full Aadhaar number)
         const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
@@ -246,15 +236,6 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
             return {
                 success: false,
                 error: 'Invalid Aadhaar number format. Must be 12 digits.',
-                isLinked: false
-            };
-        }
-        
-        if (cleanPanNumber.length !== 10 || !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanPanNumber)) {
-            console.error('Invalid PAN number format');
-            return {
-                success: false,
-                error: 'Invalid PAN number format. Must be 10 characters with format AAAAA0000A.',
                 isLinked: false
             };
         }
