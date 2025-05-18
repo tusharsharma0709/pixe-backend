@@ -213,7 +213,26 @@ const verifyPAN = async (panNumber, consent = 'Y') => {
  */
 const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
     try {
-        // Clean the numbers
+        // Validate inputs first
+        if (!aadhaarNumber) {
+            console.error('Aadhaar number is required');
+            return {
+                success: false,
+                error: 'Aadhaar number is required',
+                isLinked: false
+            };
+        }
+
+        if (!panNumber) {
+            console.error('PAN number is required');
+            return {
+                success: false,
+                error: 'PAN number is required',
+                isLinked: false
+            };
+        }
+        
+        // Clean the numbers - only after confirming they exist
         const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
         const cleanPanNumber = panNumber.replace(/\s/g, '').toUpperCase();
         
@@ -226,7 +245,8 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
             console.error('Invalid Aadhaar number format');
             return {
                 success: false,
-                error: 'Invalid Aadhaar number format. Must be 12 digits.'
+                error: 'Invalid Aadhaar number format. Must be 12 digits.',
+                isLinked: false
             };
         }
         
@@ -234,62 +254,33 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
             console.error('Invalid PAN number format');
             return {
                 success: false,
-                error: 'Invalid PAN number format. Must be 10 characters with format AAAAA0000A.'
+                error: 'Invalid PAN number format. Must be 10 characters with format AAAAA0000A.',
+                isLinked: false
             };
         }
         
-        // CORRECTED: Using the exact endpoint and parameters from the curl example
-        const result = await postJSON('/pan/aadhaar-pan-link-check', {
-            aadhaar_number: cleanAadhaarNumber,
-            // Note: PAN number is not passed in the request based on the curl example
-            // If needed we can try adding it with different parameter names
+        // Make API call to SurePass
+        // IMPORTANT: Using 'id_number' instead of 'pan' based on API errors
+        const result = await postJSON('/pan-aadhaar-link/pan-link-status', {
+            id_number: cleanAadhaarNumber,
+            consent,
+            pan_number: cleanPanNumber
         });
         
-        // Process the result to match our expected format
-        if (result.success && result.data) {
-            // Add isLinked flag based on linking_status in the response
-            const isLinked = result.data.linking_status === true || 
-                           result.data.linking_status === 'true' || 
-                           result.data.linking_status === 'Y';
-                           
-            result.isLinked = isLinked;
-            
-            // Parse the masked PAN if needed
-            if (result.data.masked_pan) {
-                result.data.pan_number = result.data.masked_pan;
-            }
-            
-            // Add link_status if it doesn't exist but linking_status does
-            if (result.data.linking_status !== undefined && result.data.link_status === undefined) {
-                result.data.link_status = result.data.linking_status ? 'Y' : 'N';
-            }
+        // Add isLinked flag for easier access
+        if (result.success && result.data && result.data.link_status) {
+            result.isLinked = result.data.link_status === 'Y' || result.data.link_status === true;
+        } else {
+            result.isLinked = false;
         }
         
         return result;
     } catch (error) {
         console.error('Aadhaar-PAN link check error:', error);
-        
-        // Use test mode as fallback if needed
-        if (process.env.TEST_MODE === 'true') {
-            console.log('⚠️ Falling back to test mode for Aadhaar-PAN link check');
-            return {
-                success: true,
-                message: 'Test mode: Aadhaar and PAN are linked',
-                isLinked: true,
-                data: {
-                    client_id: `test_${Date.now()}`,
-                    masked_pan: cleanPanNumber.substring(0, 2) + 'XXXXXX' + cleanPanNumber.substring(8),
-                    linking_status: true,
-                    reason: "linked",
-                    detailed_reason: null,
-                    link_status: 'Y'
-                }
-            };
-        }
-        
         return {
             success: false,
-            error: error.message
+            error: error.message,
+            isLinked: false
         };
     }
 };
