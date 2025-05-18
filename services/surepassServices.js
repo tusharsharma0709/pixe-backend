@@ -207,7 +207,6 @@ const verifyPAN = async (panNumber, consent = 'Y') => {
 /**
  * Check Aadhaar-PAN link
  * @param {String} aadhaarNumber - 12-digit Aadhaar number
- * @param {String} panNumber - 10-character PAN number
  * @param {String} consent - Consent flag (Y/N)
  * @returns {Promise} - API response
  */
@@ -228,7 +227,7 @@ const checkAadhaarPANLink = async (aadhaarNumber, consent = 'Y') => {
         
         // Log the API call (without showing full Aadhaar number)
         const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
-        console.log(`Checking Aadhaar-PAN link: ${maskedAadhaar} - ${cleanPanNumber} with consent: ${consent}`);
+        console.log(`Checking Aadhaar-PAN link: ${maskedAadhaar}`);
         
         // Validate inputs
         if (cleanAadhaarNumber.length !== 12) {
