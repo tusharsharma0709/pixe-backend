@@ -1,10 +1,10 @@
-// services/kycWorkflowHandlers.js - Simplified for direct Aadhaar and PAN verification
+// services/kycWorkflowHandlers.js - Fixed Implementation
 
 const { User } = require('../models/Users');
 const { UserSession } = require('../models/UserSessions');
 const { Verification } = require('../models/Verifications');
 const { ActivityLog } = require('../models/ActivityLogs');
-const surepassServices = require('./surepassServices');
+const surepassServices = require('./surepassServices'); // Import the surepass services
 
 /**
  * Helper function to check if names match
@@ -49,18 +49,30 @@ const formatPanNumber = (panNumber) => {
 };
 
 /**
+ * Helper function to mask Aadhaar number for logging
+ */
+const maskAadhaar = (aadhaarNumber) => {
+    if (!aadhaarNumber || aadhaarNumber.length < 8) return 'invalid-number';
+    return `${aadhaarNumber.substring(0, 4)}XXXX${aadhaarNumber.substring(aadhaarNumber.length - 4)}`;
+};
+
+/**
  * Verify Aadhaar number
  * @param {String} sessionId - The session ID
  * @returns {Promise<Object>} - Verification result
  */
 async function verifyAadhaar(sessionId) {
     try {
-        console.log(`Verifying Aadhaar for session ${sessionId}`);
+        console.log(`\n🔍 Verifying Aadhaar for session ${sessionId}`);
         
         // Get session data
         const session = await UserSession.findById(sessionId);
-        if (!session || !session.data) {
-            throw new Error('Session or session data not found');
+        if (!session) {
+            throw new Error('Session not found');
+        }
+        
+        if (!session.data) {
+            throw new Error('Session data is empty');
         }
         
         // Get user info
@@ -77,7 +89,7 @@ async function verifyAadhaar(sessionId) {
         
         const aadhaarNumber = formatAadhaarNumber(rawAadhaarNumber);
         if (aadhaarNumber.length !== 12) {
-            throw new Error('Invalid Aadhaar number format');
+            throw new Error(`Invalid Aadhaar number format: ${maskAadhaar(aadhaarNumber)}`);
         }
         
         // Get name from session or user data
@@ -109,18 +121,22 @@ async function verifyAadhaar(sessionId) {
         }
         
         await verification.save();
+        console.log(`✅ Verification record created/updated with ID: ${verification._id}`);
         
         // Call SurePass API to verify Aadhaar
+        console.log(`📡 Calling SurePass API to verify Aadhaar number`);
         const result = await surepassServices.verifyAadhaar(aadhaarNumber, 'Y');
-        console.log('Aadhaar verification API result:', result);
+        console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
         
         // Process verification result
         if (result && result.success) {
             // Extract verification data
-            const aadhaarName = result.data?.name_on_card || result.data?.name;
+            const aadhaarName = result.data?.name_on_card || result.data?.name || null;
+            console.log(`👤 Extracted name from Aadhaar: ${aadhaarName || 'Not available'}`);
             
             // Check name match if name is available
             const namesMatch = !name || !aadhaarName || doNamesMatch(name, aadhaarName);
+            console.log(`🔍 Name match check: ${namesMatch ? 'PASSED' : 'FAILED'}`);
             
             if (!namesMatch) {
                 // Name mismatch
@@ -160,16 +176,12 @@ async function verifyAadhaar(sessionId) {
             });
             
             await verification.save();
+            console.log(`✅ Verification record updated to COMPLETED status`);
             
             // Update user verification status
             user.isAadhaarVerified = true;
             await user.save();
-            
-            // Update session data
-            session.data.isAadhaarVerified = true;
-            session.data.aadhaarName = aadhaarName;
-            session.markModified('data');
-            await session.save();
+            console.log(`✅ User record updated with isAadhaarVerified = true`);
             
             // Log activity
             await ActivityLog.create({
@@ -203,11 +215,7 @@ async function verifyAadhaar(sessionId) {
                 data: result
             });
             await verification.save();
-            
-            // Update session data
-            session.data.isAadhaarVerified = false;
-            session.markModified('data');
-            await session.save();
+            console.log(`❌ Verification failed: ${result?.error || 'Unknown error'}`);
             
             return {
                 success: false,
@@ -230,12 +238,16 @@ async function verifyAadhaar(sessionId) {
  */
 async function verifyPAN(sessionId) {
     try {
-        console.log(`Verifying PAN for session ${sessionId}`);
+        console.log(`\n🔍 Verifying PAN for session ${sessionId}`);
         
         // Get session data
         const session = await UserSession.findById(sessionId);
-        if (!session || !session.data) {
-            throw new Error('Session or session data not found');
+        if (!session) {
+            throw new Error('Session not found');
+        }
+        
+        if (!session.data) {
+            throw new Error('Session data is empty');
         }
         
         // Get user info
@@ -252,7 +264,7 @@ async function verifyPAN(sessionId) {
         
         const panNumber = formatPanNumber(rawPanNumber);
         if (panNumber.length !== 10) {
-            throw new Error('Invalid PAN number format');
+            throw new Error(`Invalid PAN number format: ${panNumber}`);
         }
         
         // Get name from session or user data
@@ -284,18 +296,22 @@ async function verifyPAN(sessionId) {
         }
         
         await verification.save();
+        console.log(`✅ Verification record created/updated with ID: ${verification._id}`);
         
         // Call SurePass API to verify PAN
+        console.log(`📡 Calling SurePass API to verify PAN number`);
         const result = await surepassServices.verifyPAN(panNumber, 'Y');
-        console.log('PAN verification API result:', result);
+        console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
         
         // Process verification result
         if (result && result.success) {
             // Extract verification data
-            const panName = result.data?.name_on_card || result.data?.name;
+            const panName = result.data?.name_on_card || result.data?.name || null;
+            console.log(`👤 Extracted name from PAN: ${panName || 'Not available'}`);
             
             // Check name match if name is available
             const namesMatch = !name || !panName || doNamesMatch(name, panName);
+            console.log(`🔍 Name match check: ${namesMatch ? 'PASSED' : 'FAILED'}`);
             
             if (!namesMatch) {
                 // Name mismatch
@@ -335,16 +351,12 @@ async function verifyPAN(sessionId) {
             });
             
             await verification.save();
+            console.log(`✅ Verification record updated to COMPLETED status`);
             
             // Update user verification status
             user.isPanVerified = true;
             await user.save();
-            
-            // Update session data
-            session.data.isPanVerified = true;
-            session.data.panName = panName;
-            session.markModified('data');
-            await session.save();
+            console.log(`✅ User record updated with isPanVerified = true`);
             
             // Log activity
             await ActivityLog.create({
@@ -378,11 +390,7 @@ async function verifyPAN(sessionId) {
                 data: result
             });
             await verification.save();
-            
-            // Update session data
-            session.data.isPanVerified = false;
-            session.markModified('data');
-            await session.save();
+            console.log(`❌ Verification failed: ${result?.error || 'Unknown error'}`);
             
             return {
                 success: false,
@@ -405,12 +413,16 @@ async function verifyPAN(sessionId) {
  */
 async function checkAadhaarPanLink(sessionId) {
     try {
-        console.log(`Checking Aadhaar-PAN link for session ${sessionId}`);
+        console.log(`\n🔍 Checking Aadhaar-PAN link for session ${sessionId}`);
         
         // Get session
         const session = await UserSession.findById(sessionId);
-        if (!session || !session.data) {
-            throw new Error('Session or session data not found');
+        if (!session) {
+            throw new Error('Session not found');
+        }
+        
+        if (!session.data) {
+            throw new Error('Session data is empty');
         }
         
         // Get user
@@ -423,12 +435,33 @@ async function checkAadhaarPanLink(sessionId) {
         const rawAadhaarNumber = session.data.aadhaar_number;
         const rawPanNumber = session.data.pan_number;
         
-        if (!rawAadhaarNumber || !rawPanNumber) {
-            throw new Error('Aadhaar or PAN number not found in session data');
+        if (!rawAadhaarNumber) {
+            throw new Error('Aadhaar number not found in session data');
+        }
+        
+        if (!rawPanNumber) {
+            throw new Error('PAN number not found in session data');
         }
         
         const aadhaarNumber = formatAadhaarNumber(rawAadhaarNumber);
         const panNumber = formatPanNumber(rawPanNumber);
+        
+        if (aadhaarNumber.length !== 12) {
+            throw new Error(`Invalid Aadhaar number format: ${maskAadhaar(aadhaarNumber)}`);
+        }
+        
+        if (panNumber.length !== 10) {
+            throw new Error(`Invalid PAN number format: ${panNumber}`);
+        }
+        
+        // Verify that Aadhaar and PAN are already verified separately
+        if (!user.isAadhaarVerified) {
+            throw new Error('Aadhaar is not verified yet. Please verify Aadhaar first.');
+        }
+        
+        if (!user.isPanVerified) {
+            throw new Error('PAN is not verified yet. Please verify PAN first.');
+        }
         
         // Create or update verification record for Aadhaar-PAN link
         let linkVerification = await Verification.findOne({ 
@@ -449,13 +482,19 @@ async function checkAadhaarPanLink(sessionId) {
         }
         
         await linkVerification.save();
+        console.log(`✅ Verification record created/updated with ID: ${linkVerification._id}`);
         
         // Call SurePass API to check if Aadhaar and PAN are linked
+        console.log(`📡 Calling SurePass API to check Aadhaar-PAN link`);
         const result = await surepassServices.checkAadhaarPANLink(aadhaarNumber, panNumber, 'Y');
-        console.log('Aadhaar-PAN Link API result:', result);
+        console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
         
         // Process API response
-        if (result && result.success && result.data && result.data.link_status) {
+        if (result && result.success && result.data) {
+            // Check if linked
+            const isLinked = result.isLinked || result.data.link_status === 'Y' || result.data.link_status === true;
+            console.log(`🔗 Link status: ${isLinked ? 'LINKED' : 'NOT LINKED'}`);
+            
             // Update verification with successful results
             linkVerification.status = 'completed';
             linkVerification.responseData = result.data;
@@ -467,11 +506,7 @@ async function checkAadhaarPanLink(sessionId) {
             });
             
             await linkVerification.save();
-            
-            // Update session data
-            session.data.isAadhaarPanLinked = true;
-            session.markModified('data');
-            await session.save();
+            console.log(`✅ Verification record updated to COMPLETED status`);
             
             // Create activity log
             await ActivityLog.create({
@@ -491,8 +526,8 @@ async function checkAadhaarPanLink(sessionId) {
             
             return {
                 success: true,
-                message: 'Aadhaar and PAN are linked',
-                isLinked: true,
+                message: isLinked ? 'Aadhaar and PAN are linked' : 'Aadhaar and PAN are not linked',
+                isLinked: isLinked,
                 data: result.data
             };
         } else {
@@ -505,15 +540,11 @@ async function checkAadhaarPanLink(sessionId) {
                 data: result
             });
             await linkVerification.save();
-            
-            // Update session data
-            session.data.isAadhaarPanLinked = false;
-            session.markModified('data');
-            await session.save();
+            console.log(`❌ Verification failed: ${result?.error || 'Unknown error'}`);
             
             return {
                 success: false,
-                message: 'Aadhaar and PAN are not linked',
+                message: result?.error || 'Failed to check Aadhaar-PAN link',
                 isLinked: false
             };
         }
@@ -521,7 +552,8 @@ async function checkAadhaarPanLink(sessionId) {
         console.error('Error checking Aadhaar-PAN link:', error);
         return {
             success: false,
-            message: error.message || 'Error checking Aadhaar-PAN link'
+            message: error.message || 'Error checking Aadhaar-PAN link',
+            isLinked: false
         };
     }
 }
@@ -529,5 +561,10 @@ async function checkAadhaarPanLink(sessionId) {
 module.exports = {
     verifyAadhaar,
     verifyPAN,
-    checkAadhaarPanLink
+    checkAadhaarPanLink,
+    // Also export helper functions for testing
+    formatAadhaarNumber,
+    formatPanNumber,
+    doNamesMatch,
+    maskAadhaar
 };

@@ -1,4 +1,5 @@
-// services/surepassServices.js
+// services/surepassServices.js - Updated with proper error handling
+
 const axios = require('axios');
 const FormData = require('form-data');
 
@@ -22,64 +23,109 @@ const postJSON = async (endpoint, data) => {
     try {
         const url = `${SUREPASS_BASE_URL}${endpoint}`;
         console.log(`Making SurePass API request to: ${url}`);
-        console.log(`Request payload:`, data);
+        console.log(`Request payload:`, JSON.stringify(data, null, 2));
+        
+        if (!SUREPASS_API_KEY) {
+            console.error('SUREPASS_API_KEY is not set in environment');
+            throw new Error('API key not configured');
+        }
         
         const response = await axios.post(url, data, {
             headers: {
                 'Authorization': `Bearer ${SUREPASS_API_KEY}`,
                 'Content-Type': 'application/json'
-            }
+            },
+            timeout: 15000 // 15-second timeout
         });
         
-        console.log(`SurePass API response:`, response.data);
-        return response.data;
+        console.log(`SurePass API response status: ${response.status}`);
+        console.log(`SurePass API response:`, JSON.stringify(response.data, null, 2));
+        
+        return {
+            success: true,
+            data: response.data
+        };
     } catch (error) {
-        console.error('SurePass API error:', error.response?.data || error.message);
-        throw error;
+        console.error('SurePass API error:');
+        if (error.response) {
+            // The server responded with a status code outside of 2xx
+            console.error(`Status: ${error.response.status}`);
+            console.error(`Data:`, error.response.data);
+            console.error(`Headers:`, error.response.headers);
+        } else if (error.request) {
+            // The request was made but no response was received
+            console.error(`No response received:`, error.request);
+        } else {
+            // Something happened in setting up the request
+            console.error(`Error setting up request:`, error.message);
+        }
+        
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message,
+            statusCode: error.response?.status
+        };
     }
 };
 
 /**
- * Make a form-data POST request to SurePass API for file uploads
+ * Make a form data POST request to SurePass API (for file uploads)
  * @param {String} endpoint - API endpoint path
- * @param {Buffer|String} fileBuffer - File buffer or path
- * @param {String} fieldName - Form field name for the file
+ * @param {Buffer} fileBuffer - File buffer to upload
+ * @param {String} fieldName - Form field name 
  * @returns {Promise} - API response
  */
 const postFormData = async (endpoint, fileBuffer, fieldName = 'file') => {
     try {
         const url = `${SUREPASS_BASE_URL}${endpoint}`;
-        console.log(`Making SurePass file upload request to: ${url}`);
+        console.log(`Making SurePass API FormData request to: ${url}`);
         
-        const formData = new FormData();
-        
-        if (typeof fileBuffer === 'string') {
-            // It's a file path, read it
-            const fs = require('fs');
-            const filename = fileBuffer.split('/').pop();
-            formData.append(fieldName, fs.createReadStream(fileBuffer), filename);
-        } else {
-            // It's a buffer
-            formData.append(fieldName, fileBuffer, {
-                filename: `upload_${Date.now()}.jpg`,
-                contentType: 'application/octet-stream'
-            });
+        if (!SUREPASS_API_KEY) {
+            console.error('SUREPASS_API_KEY is not set in environment');
+            throw new Error('API key not configured');
         }
+        
+        // Create form data
+        const formData = new FormData();
+        formData.append(fieldName, fileBuffer, {
+            filename: 'document.jpg',
+            contentType: 'image/jpeg'
+        });
         
         const response = await axios.post(url, formData, {
             headers: {
                 'Authorization': `Bearer ${SUREPASS_API_KEY}`,
                 ...formData.getHeaders()
             },
-            maxContentLength: Infinity,
-            maxBodyLength: Infinity
+            timeout: 30000 // 30-second timeout for file uploads
         });
         
-        console.log(`SurePass file upload response:`, response.data);
-        return response.data;
+        console.log(`SurePass API response status: ${response.status}`);
+        console.log(`SurePass API response:`, JSON.stringify(response.data, null, 2));
+        
+        return {
+            success: true,
+            data: response.data
+        };
     } catch (error) {
-        console.error('SurePass file upload error:', error.response?.data || error.message);
-        throw error;
+        console.error('SurePass API error (FormData):');
+        if (error.response) {
+            // The server responded with a status code outside of 2xx
+            console.error(`Status: ${error.response.status}`);
+            console.error(`Data:`, error.response.data);
+        } else if (error.request) {
+            // The request was made but no response was received
+            console.error(`No response received:`, error.request);
+        } else {
+            // Something happened in setting up the request
+            console.error(`Error setting up request:`, error.message);
+        }
+        
+        return {
+            success: false,
+            error: error.response?.data?.error || error.message,
+            statusCode: error.response?.status
+        };
     }
 };
 
@@ -91,13 +137,33 @@ const postFormData = async (endpoint, fileBuffer, fieldName = 'file') => {
  */
 const verifyAadhaar = async (aadhaarNumber, consent = 'Y') => {
     try {
-        return await postJSON('/api/v1/aadhaar-validation/aadhaar-validation', {
-            id_number: aadhaarNumber,
+        // Clean the Aadhaar number - remove spaces and any non-numeric characters
+        const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
+        
+        // Log the API call (without showing full Aadhaar number)
+        const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
+        console.log(`Verifying Aadhaar: ${maskedAadhaar} with consent: ${consent}`);
+        
+        // Validate Aadhaar format
+        if (cleanAadhaarNumber.length !== 12) {
+            console.error('Invalid Aadhaar number format');
+            return {
+                success: false,
+                error: 'Invalid Aadhaar number format. Must be 12 digits.'
+            };
+        }
+        
+        // Make API call to SurePass
+        return await postJSON('/aadhaar-validation/aadhaar-validation', {
+            id_number: cleanAadhaarNumber,
             consent
         });
     } catch (error) {
         console.error('Aadhaar verification error:', error);
-        throw error;
+        return {
+            success: false,
+            error: error.message
+        };
     }
 };
 
@@ -109,13 +175,32 @@ const verifyAadhaar = async (aadhaarNumber, consent = 'Y') => {
  */
 const verifyPAN = async (panNumber, consent = 'Y') => {
     try {
-        return await postJSON('/api/v1/pan/pan', {
-            pan: panNumber,
+        // Clean the PAN number - remove spaces and convert to uppercase
+        const cleanPanNumber = panNumber.replace(/\s/g, '').toUpperCase();
+        
+        // Log the API call
+        console.log(`Verifying PAN: ${cleanPanNumber} with consent: ${consent}`);
+        
+        // Validate PAN format (10 characters, starts with letter, etc.)
+        if (cleanPanNumber.length !== 10 || !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanPanNumber)) {
+            console.error('Invalid PAN number format');
+            return {
+                success: false,
+                error: 'Invalid PAN number format. Must be 10 characters with format AAAAA0000A.'
+            };
+        }
+        
+        // Make API call to SurePass
+        return await postJSON('/pan/pan', {
+            pan: cleanPanNumber,
             consent
         });
     } catch (error) {
         console.error('PAN verification error:', error);
-        throw error;
+        return {
+            success: false,
+            error: error.message
+        };
     }
 };
 
@@ -128,14 +213,50 @@ const verifyPAN = async (panNumber, consent = 'Y') => {
  */
 const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
     try {
-        return await postJSON('/api/v1/pan/aadhaar-pan-link-check', {
-            id_number: aadhaarNumber,
-            pan_number: panNumber,
-            consent
+        // Clean the numbers
+        const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
+        const cleanPanNumber = panNumber.replace(/\s/g, '').toUpperCase();
+        
+        // Log the API call (without showing full Aadhaar number)
+        const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
+        console.log(`Checking Aadhaar-PAN link: ${maskedAadhaar} - ${cleanPanNumber} with consent: ${consent}`);
+        
+        // Validate inputs
+        if (cleanAadhaarNumber.length !== 12) {
+            console.error('Invalid Aadhaar number format');
+            return {
+                success: false,
+                error: 'Invalid Aadhaar number format. Must be 12 digits.'
+            };
+        }
+        
+        if (cleanPanNumber.length !== 10 || !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanPanNumber)) {
+            console.error('Invalid PAN number format');
+            return {
+                success: false,
+                error: 'Invalid PAN number format. Must be 10 characters with format AAAAA0000A.'
+            };
+        }
+        
+        // Make API call to SurePass
+        const result = await postJSON('/pan-aadhaar-link/pan-link-status', {
+            id_number: cleanAadhaarNumber,
+            consent,
+            pan_number: cleanPanNumber
         });
+        
+        // Add isLinked flag for easier access
+        if (result.success && result.data && result.data.link_status) {
+            result.isLinked = result.data.link_status === 'Y' || result.data.link_status === true;
+        }
+        
+        return result;
     } catch (error) {
         console.error('Aadhaar-PAN link check error:', error);
-        throw error;
+        return {
+            success: false,
+            error: error.message
+        };
     }
 };
 
@@ -146,12 +267,32 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
  */
 const generateAadhaarOTP = async (aadhaarNumber) => {
     try {
-        return await postJSON('/api/v1/aadhaar-v2/generate-otp', {
-            id_number: aadhaarNumber
+        // Clean the Aadhaar number
+        const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
+        
+        // Log the API call (without showing full Aadhaar number)
+        const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
+        console.log(`Generating OTP for Aadhaar: ${maskedAadhaar}`);
+        
+        // Validate Aadhaar format
+        if (cleanAadhaarNumber.length !== 12) {
+            console.error('Invalid Aadhaar number format');
+            return {
+                success: false,
+                error: 'Invalid Aadhaar number format. Must be 12 digits.'
+            };
+        }
+        
+        // Make API call to SurePass
+        return await postJSON('/aadhaar-v2/generate-otp', {
+            id_number: cleanAadhaarNumber
         });
     } catch (error) {
         console.error('Aadhaar OTP generation error:', error);
-        throw error;
+        return {
+            success: false,
+            error: error.message
+        };
     }
 };
 
@@ -163,94 +304,50 @@ const generateAadhaarOTP = async (aadhaarNumber) => {
  */
 const submitAadhaarOTP = async (clientId, otp) => {
     try {
-        return await postJSON('/api/v1/aadhaar-v2/submit-otp', {
+        console.log(`Submitting OTP for client ID: ${clientId}`);
+        
+        if (!clientId) {
+            return {
+                success: false,
+                error: 'Client ID is required'
+            };
+        }
+        
+        if (!otp || otp.length < 4) {
+            return {
+                success: false,
+                error: 'Valid OTP is required'
+            };
+        }
+        
+        // Make API call to SurePass
+        return await postJSON('/aadhaar-v2/submit-otp', {
             client_id: clientId,
             otp
         });
     } catch (error) {
         console.error('Aadhaar OTP submission error:', error);
-        throw error;
+        return {
+            success: false,
+            error: error.message
+        };
     }
 };
 
 /**
- * Verify bank account via penny drop
- * @param {Object} data - Bank account data
- * @returns {Promise} - API response
+ * Helper function to mask Aadhaar number for logging purposes
+ * @param {String} aadhaarNumber - Aadhaar number to mask
+ * @returns {String} - Masked Aadhaar number
  */
-const verifyBankAccount = async (data) => {
-    try {
-        return await postJSON('/api/v1/bank-verification', data);
-    } catch (error) {
-        console.error('Bank verification error:', error);
-        throw error;
+const maskAadhaarNumber = (aadhaarNumber) => {
+    if (!aadhaarNumber || aadhaarNumber.length !== 12) {
+        return 'invalid-aadhaar';
     }
+    
+    return `${aadhaarNumber.substring(0, 4)}XXXX${aadhaarNumber.substring(8)}`;
 };
 
-/**
- * Process OCR for Aadhaar card images
- * @param {Buffer} fileBuffer - File buffer of Aadhaar card image
- * @returns {Promise} - API response with OCR data
- */
-const processAadhaarOCR = async (fileBuffer) => {
-    try {
-        return await postFormData('/api/ocr/aadhaar', fileBuffer);
-    } catch (error) {
-        console.error('Aadhaar OCR error:', error);
-        throw error;
-    }
-};
-
-/**
- * Process OCR for PAN card images
- * @param {Buffer} fileBuffer - File buffer of PAN card image
- * @returns {Promise} - API response with OCR data
- */
-const processPANOCR = async (fileBuffer) => {
-    try {
-        return await postFormData('/api/ocr/pan', fileBuffer);
-    } catch (error) {
-        console.error('PAN OCR error:', error);
-        throw error;
-    }
-};
-
-/**
- * Get comprehensive PAN card information
- * @param {String} panNumber - PAN card number
- * @param {String} consent - Consent flag (Y/N)
- * @returns {Promise} - API response with comprehensive PAN info
- */
-const getPANComprehensive = async (panNumber, consent = 'Y') => {
-    try {
-        return await postJSON('/api/v1/pan/pan-comprehensive', {
-            pan: panNumber,
-            consent
-        });
-    } catch (error) {
-        console.error('PAN comprehensive error:', error);
-        throw error;
-    }
-};
-
-/**
- * Validate PAN format and basic authenticity
- * @param {String} panNumber - PAN card number
- * @param {String} consent - Consent flag (Y/N)
- * @returns {Promise} - API response
- */
-const validatePAN = async (panNumber, consent = 'Y') => {
-    try {
-        return await postJSON('/api/v1/pan/validate', {
-            pan: panNumber,
-            consent
-        });
-    } catch (error) {
-        console.error('PAN validation error:', error);
-        throw error;
-    }
-};
-
+// Export the functions
 module.exports = {
     postJSON,
     postFormData,
@@ -258,10 +355,5 @@ module.exports = {
     verifyPAN,
     checkAadhaarPANLink,
     generateAadhaarOTP,
-    submitAadhaarOTP,
-    verifyBankAccount,
-    processAadhaarOCR,
-    processPANOCR,
-    getPANComprehensive,
-    validatePAN
+    submitAadhaarOTP
 };
