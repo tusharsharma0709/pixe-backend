@@ -1,4 +1,4 @@
-// models/Verifications.js
+// models/Verifications.js - Complete Schema Implementation
 const mongoose = require('mongoose');
 
 const verificationSchema = new mongoose.Schema({
@@ -54,11 +54,11 @@ const verificationSchema = new mongoose.Schema({
         default: null // Provider's reference ID
     },
     requestData: {
-        type: Object,
+        type: mongoose.Schema.Types.Mixed,
         default: null // Data sent to verification provider
     },
     responseData: {
-        type: Object,
+        type: mongoose.Schema.Types.Mixed,
         default: null // Data received from verification provider
     },
     verificationDetails: {
@@ -113,19 +113,15 @@ const verificationSchema = new mongoose.Schema({
             type: String,
             default: null
         },
-        // Generic fields
+        // Name matching details
         nameMatch: {
-            status: {
-                type: Boolean,
-                default: null
-            },
-            score: {
-                type: Number,
-                default: null
-            },
-            details: {
-                type: Object,
-                default: null
+            type: mongoose.Schema.Types.Mixed,
+            default: function() {
+                return {
+                    status: null,
+                    score: null,
+                    details: {}
+                };
             }
         }
     },
@@ -177,7 +173,7 @@ const verificationSchema = new mongoose.Schema({
             default: null
         },
         data: {
-            type: Object,
+            type: mongoose.Schema.Types.Mixed,
             default: null
         }
     }],
@@ -235,6 +231,51 @@ verificationSchema.index({ adminId: 1, verificationType: 1, status: 1 });
 verificationSchema.index({ agentId: 1, status: 1 });
 verificationSchema.index({ status: 1, verificationType: 1, createdAt: -1 });
 verificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL index for expired records
+
+// Add pre-save middleware to ensure proper structure of nested objects
+verificationSchema.pre('save', function(next) {
+    // Ensure verificationDetails exists
+    if (!this.verificationDetails) {
+        this.verificationDetails = {};
+    }
+    
+    // Ensure nameMatch is properly structured
+    if (this.verificationDetails && this.verificationDetails.nameMatch === undefined) {
+        this.verificationDetails.nameMatch = {
+            status: null,
+            score: null,
+            details: {}
+        };
+    }
+    
+    next();
+});
+
+// Add method to check verification status
+verificationSchema.methods.isComplete = function() {
+    return this.status === 'completed';
+};
+
+// Add method to get a safe version of sensitive data
+verificationSchema.methods.getSafeData = function() {
+    const safeData = this.toObject();
+    
+    // Mask Aadhaar number
+    if (safeData.verificationDetails && safeData.verificationDetails.aadhaarNumber) {
+        const aadhaar = safeData.verificationDetails.aadhaarNumber;
+        safeData.verificationDetails.aadhaarNumber = aadhaar.length >= 12 ? 
+            `${aadhaar.substring(0, 4)}XXXX${aadhaar.substring(8)}` : 'XXXXXXXX';
+    }
+    
+    // Mask PAN number
+    if (safeData.verificationDetails && safeData.verificationDetails.panNumber) {
+        const pan = safeData.verificationDetails.panNumber;
+        safeData.verificationDetails.panNumber = pan.length >= 10 ? 
+            `${pan.substring(0, 2)}XXXXX${pan.substring(7)}` : 'XXXXXXX';
+    }
+    
+    return safeData;
+};
 
 const Verification = mongoose.model('Verifications', verificationSchema);
 module.exports = { Verification };
