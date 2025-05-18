@@ -1,4 +1,4 @@
-// Part 1: services/workflowExecutor.js - Updated with KYC processing
+// services/workflowExecutor.js - Complete fixed version for KYC workflow integration
 
 const { Message } = require('../models/Messages');
 const { Workflow } = require('../models/Workflows');
@@ -9,14 +9,113 @@ const whatsappService = require('./whatsappServices');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 
-// Import KYC Handlers - This will be created in a separate file
-// const kycWorkflowHandlers = require('./kycWorkflowHandlers');
-
 // Store recently processed message IDs to prevent duplicate processing
 const recentProcessedMessages = new Map();
 
 // Track node execution counts to prevent infinite loops
 const nodeExecutionCounts = new Map();
+
+// Helper functions defined first
+function incrementNodeExecutionCount(key) {
+    const count = nodeExecutionCounts.get(key) || 0;
+    nodeExecutionCounts.set(key, count + 1);
+    
+    // Auto cleanup - remove counts older than 1 hour
+    setTimeout(() => {
+        nodeExecutionCounts.delete(key);
+    }, 3600000);
+    
+    return count + 1;
+}
+
+function resetNodeExecutionCount(sessionId, nodeId) {
+    const key = `${sessionId}:${nodeId}`;
+    nodeExecutionCounts.delete(key);
+}
+
+function evaluateCondition(condition, data) {
+    try {
+        if (!condition) return false;
+        
+        // Safety check for data
+        if (!data) {
+            console.error('❌ No data provided for condition evaluation');
+            return false;
+        }
+        
+        // Debug condition evaluation
+        console.log(`  Evaluating: "${condition}" with data:`, data);
+        
+        // Check for boolean values directly
+        if (condition === 'true') return true;
+        if (condition === 'false') return false;
+        
+        // Check if we're testing a direct boolean property
+        if (data[condition] !== undefined) {
+            return Boolean(data[condition]);
+        }
+        
+        // Check for direct comparison operators
+        const compareRegex = /(\w+)\s*(>|<|>=|<=|==|!=)\s*([\w"']+)/;
+        const compareMatch = condition.match(compareRegex);
+        
+        if (compareMatch) {
+            const [, field, operator, valueStr] = compareMatch;
+            const fieldValue = data[field];
+            
+            // Handle different value types
+            let value;
+            if (valueStr.startsWith('"') || valueStr.startsWith("'")) {
+                // It's a string, remove quotes
+                value = valueStr.substring(1, valueStr.length - 1);
+            } else if (valueStr === 'true') {
+                value = true;
+            } else if (valueStr === 'false') {
+                value = false;
+            } else if (!isNaN(Number(valueStr))) {
+                value = Number(valueStr);
+            } else {
+                // It might be another field reference
+                value = data[valueStr];
+            }
+            
+            // Debug comparison
+            console.log(`  Comparing: ${field} (${fieldValue}) ${operator} ${value}`);
+            
+            switch (operator) {
+                case '>': return fieldValue > value;
+                case '<': return fieldValue < value;
+                case '>=': return fieldValue >= value;
+                case '<=': return fieldValue <= value;
+                case '==': return fieldValue == value; // Use loose equality
+                case '!=': return fieldValue != value; // Use loose inequality
+                default: return false;
+            }
+        }
+        
+        return false;
+    } catch (error) {
+        console.error('Error evaluating condition:', error);
+        return false;
+    }
+}
+
+function generateSessionToken(session) {
+    try {
+        return jwt.sign(
+            { 
+                userId: session.userId,
+                sessionId: session._id,
+                workflowId: session.workflowId
+            },
+            process.env.JWT_SECRET || 'workflow_jwt_secret',
+            { expiresIn: '1h' }
+        );
+    } catch (error) {
+        console.error('Error generating session token:', error);
+        return '';
+    }
+}
 
 /**
  * Process user input for a workflow
@@ -120,8 +219,6 @@ async function processWorkflowInput(session, input, messageId = null) {
         }
     }
 }
-
-// Part 2: services/workflowExecutor.js - The executeWorkflowNode function
 
 /**
  * Execute a workflow node
@@ -291,8 +388,7 @@ async function executeWorkflowNode(session, nodeId) {
                 
                 console.log(`⏸️ Input node - waiting for variable: ${node.variableName}`);
                 break;
-                // Part 3: services/workflowExecutor.js - API handling and KYC implementation
-
+                
             case 'condition':
                 console.log(`  Evaluating condition: ${node.condition}`);
                 
@@ -373,50 +469,98 @@ async function executeWorkflowNode(session, nodeId) {
                     if (node.apiEndpoint === '/api/verification/aadhaar-ocr') {
                         console.log('  🔍 Special handling for Aadhaar OCR verification');
                         
-                        // Import KYC handlers dynamically to avoid circular dependencies
-                        const kycWorkflowHandlers = require('./kycWorkflowHandlers');
-                        
-                        // Process Aadhaar OCR
-                        const result = await kycWorkflowHandlers.processAadhaarOCR(session._id);
-                        console.log('  Aadhaar OCR result:', result);
-                        
-                        // Store result in session data
-                        session.data.aadhaarVerificationResult = result;
-                        session.data.isAadhaarVerified = result.success;
-                        session.markModified('data');
-                        await session.save();
+                        try {
+                            // Import KYC handlers dynamically to avoid circular dependencies
+                            const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                            
+                            // Process Aadhaar OCR
+                            const result = await kycWorkflowHandlers.processAadhaarOCR(session._id);
+                            console.log('  Aadhaar OCR result:', result);
+                            
+                            // Store result in session data
+                            session.data.aadhaarVerificationResult = result;
+                            session.data.isAadhaarVerified = result.success;
+                            if (result.success && result.aadhaarName) {
+                                session.data.aadhaarName = result.aadhaarName;
+                            }
+                            session.markModified('data');
+                            await session.save();
+                        } catch (kycError) {
+                            console.error('Error processing Aadhaar OCR:', kycError);
+                            // Set verification to false on error
+                            session.data.isAadhaarVerified = false;
+                            session.markModified('data');
+                            await session.save();
+                            
+                            // Go to error node if defined
+                            if (node.errorNodeId) {
+                                return executeWorkflowNode(session, node.errorNodeId);
+                            }
+                            throw kycError;
+                        }
                     }
                     else if (node.apiEndpoint === '/api/verification/pan') {
                         console.log('  🔍 Special handling for PAN verification');
                         
-                        // Import KYC handlers dynamically to avoid circular dependencies
-                        const kycWorkflowHandlers = require('./kycWorkflowHandlers');
-                        
-                        // Process PAN OCR
-                        const result = await kycWorkflowHandlers.processPanOCR(session._id);
-                        console.log('  PAN OCR result:', result);
-                        
-                        // Store result in session data
-                        session.data.panVerificationResult = result;
-                        session.data.isPanVerified = result.success;
-                        session.markModified('data');
-                        await session.save();
+                        try {
+                            // Import KYC handlers dynamically to avoid circular dependencies
+                            const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                            
+                            // Process PAN OCR
+                            const result = await kycWorkflowHandlers.processPanOCR(session._id);
+                            console.log('  PAN OCR result:', result);
+                            
+                            // Store result in session data
+                            session.data.panVerificationResult = result;
+                            session.data.isPanVerified = result.success;
+                            if (result.success && result.panName) {
+                                session.data.panName = result.panName;
+                            }
+                            session.markModified('data');
+                            await session.save();
+                        } catch (kycError) {
+                            console.error('Error processing PAN OCR:', kycError);
+                            // Set verification to false on error
+                            session.data.isPanVerified = false;
+                            session.markModified('data');
+                            await session.save();
+                            
+                            // Go to error node if defined
+                            if (node.errorNodeId) {
+                                return executeWorkflowNode(session, node.errorNodeId);
+                            }
+                            throw kycError;
+                        }
                     }
                     else if (node.apiEndpoint === '/api/verification/aadhaar-pan-link') {
                         console.log('  🔍 Special handling for Aadhaar-PAN linking check');
                         
-                        // Import KYC handlers dynamically to avoid circular dependencies
-                        const kycWorkflowHandlers = require('./kycWorkflowHandlers');
-                        
-                        // Check Aadhaar-PAN link
-                        const result = await kycWorkflowHandlers.checkAadhaarPanLink(session._id);
-                        console.log('  Aadhaar-PAN link result:', result);
-                        
-                        // Store result in session data
-                        session.data.aadhaarPanLinkResult = result;
-                        session.data.isAadhaarPanLinked = result.success && result.isLinked;
-                        session.markModified('data');
-                        await session.save();
+                        try {
+                            // Import KYC handlers dynamically to avoid circular dependencies
+                            const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                            
+                            // Check Aadhaar-PAN link
+                            const result = await kycWorkflowHandlers.checkAadhaarPanLink(session._id);
+                            console.log('  Aadhaar-PAN link result:', result);
+                            
+                            // Store result in session data
+                            session.data.aadhaarPanLinkResult = result;
+                            session.data.isAadhaarPanLinked = result.success && result.isLinked;
+                            session.markModified('data');
+                            await session.save();
+                        } catch (kycError) {
+                            console.error('Error checking Aadhaar-PAN link:', kycError);
+                            // Set link verification to false on error
+                            session.data.isAadhaarPanLinked = false;
+                            session.markModified('data');
+                            await session.save();
+                            
+                            // Go to error node if defined
+                            if (node.errorNodeId) {
+                                return executeWorkflowNode(session, node.errorNodeId);
+                            }
+                            throw kycError;
+                        }
                     }
                     else if (node.apiEndpoint === '/api/verification/status') {
                         console.log('  Special handling for verification status API');
@@ -581,148 +725,6 @@ async function executeWorkflowNode(session, nodeId) {
             console.error(`❌ Error saving session:`, saveError);
         }
         return false;
-    }
-}
-
-// Part 4: services/workflowExecutor.js - Helper functions and module exports (continued)
-
-function evaluateCondition(condition, data) {
-    try {
-        if (!condition) return false;
-        
-        // Safety check for data
-        if (!data) {
-            console.error('❌ No data provided for condition evaluation');
-            return false;
-        }
-        
-        // Debug condition evaluation
-        console.log(`  Evaluating: "${condition}" with data:`, data);
-        
-        // Check for length conditions
-        const lengthRegex = /(\w+)\.length\s*(>|<|>=|<=|==|!=)\s*(\d+)/;
-        const lengthMatch = condition.match(lengthRegex);
-        
-        if (lengthMatch) {
-            const [, field, operator, value] = lengthMatch;
-            const fieldValue = data[field];
-            if (!fieldValue) return false;
-            
-            const length = fieldValue.length;
-            const compareValue = parseInt(value);
-            
-            switch (operator) {
-                case '>': return length > compareValue;
-                case '<': return length < compareValue;
-                case '>=': return length >= compareValue;
-                case '<=': return length <= compareValue;
-                case '==': return length === compareValue;
-                case '!=': return length !== compareValue;
-                default: return false;
-            }
-        }
-        
-        // Check for includes conditions
-        const includesRegex = /(\w+)\.includes\(['"](.+)['"]\)/;
-        const includesMatch = condition.match(includesRegex);
-        
-        if (includesMatch) {
-            const [, field, searchValue] = includesMatch;
-            const fieldValue = data[field];
-            return fieldValue && fieldValue.includes(searchValue);
-        }
-        
-        // Check for boolean values directly
-        if (condition === 'true') return true;
-        if (condition === 'false') return false;
-        
-        // Check if we're testing a direct boolean property
-        if (data[condition] !== undefined) {
-            return Boolean(data[condition]);
-        }
-        
-        // Check for direct comparison operators
-        const compareRegex = /(\w+)\s*(>|<|>=|<=|==|!=)\s*([\w"']+)/;
-        const compareMatch = condition.match(compareRegex);
-        
-        if (compareMatch) {
-            const [, field, operator, valueStr] = compareMatch;
-            const fieldValue = data[field];
-            
-            // Handle different value types
-            let value;
-            if (valueStr.startsWith('"') || valueStr.startsWith("'")) {
-                // It's a string, remove quotes
-                value = valueStr.substring(1, valueStr.length - 1);
-            } else if (valueStr === 'true') {
-                value = true;
-            } else if (valueStr === 'false') {
-                value = false;
-            } else if (!isNaN(Number(valueStr))) {
-                value = Number(valueStr);
-            } else {
-                // It might be another field reference
-                value = data[valueStr];
-            }
-            
-            // Debug comparison
-            console.log(`  Comparing: ${field} (${fieldValue}) ${operator} ${value}`);
-            
-            switch (operator) {
-                case '>': return fieldValue > value;
-                case '<': return fieldValue < value;
-                case '>=': return fieldValue >= value;
-                case '<=': return fieldValue <= value;
-                case '==': return fieldValue == value; // Use loose equality
-                case '!=': return fieldValue != value; // Use loose inequality
-                default: return false;
-            }
-        }
-        
-        // Try complex conditions as a last resort
-        if (condition.includes('&&') || condition.includes('||') || condition.includes('!')) {
-            try {
-                // Create safe evaluation context
-                const context = { ...data };
-                
-                // Create and execute function to evaluate condition
-                const evalFunction = new Function(
-                    ...Object.keys(context),
-                    `try { return ${condition}; } catch (e) { return false; }`
-                );
-                
-                return evalFunction(...Object.values(context));
-            } catch (e) {
-                console.error('Error evaluating complex condition:', e);
-                return false;
-            }
-        }
-        
-        return false;
-    } catch (error) {
-        console.error('Error evaluating condition:', error);
-        return false;
-    }
-}
-
-/**
- * Generate a token for API calls
- * @param {Object} session - User session
- * @returns {String} JWT token
- */
-function generateSessionToken(session) {
-    try {
-        return jwt.sign(
-            { 
-                userId: session.userId,
-                sessionId: session._id,
-                workflowId: session.workflowId
-            },
-            process.env.JWT_SECRET || 'workflow_jwt_secret'
-        );
-    } catch (error) {
-        console.error('Error generating session token:', error);
-        return '';
     }
 }
 
