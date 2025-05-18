@@ -1,46 +1,106 @@
+// routes/surepassRoutes.js
 const express = require('express');
 const router = express.Router();
-const controller = require('../controllers/surepassControllers');
+const surepassController = require('../controllers/surepassControllers');
+const { userAuth } = require('../middlewares/auth');
 const upload = require('../middlewares/multer');
 
-// Example: POST /api/surepass/emirates-id-ocr
-router.post('/emirates-id-ocr', upload.single('file'), controller.emiratesIdOCR);
-router.post('/emirates-id-verify', controller.emiratesIdVerification);
-router.post('/trade-license', upload.single('file'), controller.uaeTradeLicense);
-router.post('/trn-ocr', upload.single('file'), controller.uaeTrnOCR);
-router.post('/trn-verify', controller.uaeTrnVerification);
-router.post('/uae-dl-verify', controller.uaeDlVerification);
-router.post('/uae-rc-verify', controller.uaeVehicleRC);
-router.post('/qatar-id-verify', controller.qatarIdVerification);
-router.post('/bank-account', controller.bankAccountVerification);//checked
-router.post('/epfo-passbook', controller.epfoPassbook);
-router.post('/form-26as', controller.form26AS);
-router.post('/itr', controller.incomeTaxReturn);
-router.post('/pan-verify', controller.panVerification);//checked
-router.post('/pan-advance', controller.panComprehensive);//checked
-router.post('/aadhaar-to-pan', controller.aadhaarToPan);//checked
-router.post('/pan-validation', controller.panValidation);
-router.post('/aadhaar-verification', controller.aadhaarVerification);//checked
-router.post('/voter-id-verify', controller.voterIdVerification);
-router.post('/voter-id-ocr', upload.single('file'), controller.voterIdOCR);
-router.post('/dl-verification', controller.dlVerification);//checked
-router.post('/passport-verification', controller.passportVerification);
-router.post('/passport-ocr', upload.single('file'), controller.passportOCR);
-router.post('/photo-id-ocr', upload.single('file'), controller.photoIdOCR);
-router.post('/rc-verification', controller.vehicleRCVerification);//checked
-router.post('/chassis-to-rc', controller.chassisToRC);//checked
-router.post('/rc-financer', controller.rcWithFinancer);
-router.post('/aadhaar-mask', upload.single('file'), controller.aadhaarMasking);
-router.post('/gst-otp', controller.gstOtpVerification);
-router.post('/gst-verify', controller.gstVerification);
-router.post('/gst-details', controller.gstToPhone);
-router.post('/mca-company', controller.mcaData);
-router.post('/mca-filing', controller.mcaDocs);
-router.post('/tds-compliance', controller.tds206Compliance);
-router.post('/fssai-verify', controller.fssaiVerification);
-router.post('/tan-verify', controller.tanVerification);
-router.post('/udyog-verify', controller.udyogVerification);
-router.post('/udyam-verification', controller.udyamVerification);
-router.post('/iec-verify', controller.iecVerification);
+/**
+ * @route   POST /api/v1/aadhaar-validation/aadhaar-validation
+ * @desc    Validate Aadhaar by ID number
+ * @access  Private
+ */
+router.post('/aadhaar-validation', 
+    userAuth, 
+    surepassController.aadhaarVerification
+);
+
+/**
+ * @route   POST /api/v1/pan/pan
+ * @desc    Validate PAN card
+ * @access  Private
+ */
+router.post('/pan-verification', 
+    userAuth, 
+    surepassController.panVerification
+);
+
+/**
+ * @route   POST /api/v1/pan/aadhaar-pan-link-check
+ * @desc    Check if Aadhaar and PAN are linked
+ * @access  Private
+ */
+router.post('/aadhaar-pan-link-check', 
+    userAuth, 
+    surepassController.aadhaarToPan
+);
+
+/**
+ * @route   POST /api/ocr/aadhaar
+ * @desc    Process OCR for Aadhaar card
+ * @access  Private
+ */
+router.post('/ocr/aadhaar', 
+    userAuth, 
+    upload.single('file'), 
+    surepassController.aadhaarOCR
+);
+
+/**
+ * @route   POST /api/ocr/pan
+ * @desc    Process OCR for PAN card
+ * @access  Private
+ */
+router.post('/ocr/pan', 
+    userAuth, 
+    upload.single('file'), 
+    surepassController.voterIdOCR
+);
+
+/**
+ * @route   POST /api/v1/aadhaar-v2/generate-otp
+ * @desc    Generate OTP for Aadhaar verification
+ * @access  Private
+ */
+router.post('/aadhaar-v2/generate-otp', 
+    userAuth, 
+    (req, res) => {
+        const { id_number } = req.body;
+        if (!id_number) {
+            return res.status(400).json({ error: 'Aadhaar number is required' });
+        }
+        
+        // Forward the request to SurePass
+        surepassController.aadhaarVerification(req, res);
+    }
+);
+
+/**
+ * @route   POST /api/v1/aadhaar-v2/submit-otp
+ * @desc    Submit OTP for Aadhaar verification
+ * @access  Private
+ */
+router.post('/aadhaar-v2/submit-otp', 
+    userAuth, 
+    (req, res) => {
+        const { client_id, otp } = req.body;
+        if (!client_id || !otp) {
+            return res.status(400).json({ error: 'Client ID and OTP are required' });
+        }
+        
+        // Forward the request to SurePass
+        surepassController.aadhaarVerification(req, res);
+    }
+);
+
+/**
+ * @route   POST /api/v1/bank-verification
+ * @desc    Verify bank account
+ * @access  Private
+ */
+router.post('/bank-verification', 
+    userAuth, 
+    surepassController.bankAccountVerification
+);
 
 module.exports = router;

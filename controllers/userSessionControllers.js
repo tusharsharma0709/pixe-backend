@@ -48,7 +48,7 @@ const UserSessionController = {
                 currentNodeId,
                 source
             } = req.body;
-
+    
             // Validate required fields
             if (!workflowId) {
                 return res.status(400).json({
@@ -56,7 +56,7 @@ const UserSessionController = {
                     message: "Workflow ID is required"
                 });
             }
-
+    
             // Check if workflow exists
             const workflow = await Workflow.findById(workflowId);
             if (!workflow) {
@@ -65,7 +65,7 @@ const UserSessionController = {
                     message: "Workflow not found"
                 });
             }
-
+    
             let user;
             // Check if user exists by userId or phone, create if not exists
             if (userId) {
@@ -96,7 +96,7 @@ const UserSessionController = {
                     message: "Either userId or phone is required"
                 });
             }
-
+    
             // Check if admin exists if adminId is provided
             if (adminId) {
                 const admin = await Admin.findById(adminId);
@@ -107,29 +107,7 @@ const UserSessionController = {
                     });
                 }
             }
-
-            // Check if agent exists if agentId is provided
-            if (agentId) {
-                const agent = await Agent.findById(agentId);
-                if (!agent) {
-                    return res.status(404).json({
-                        success: false,
-                        message: "Agent not found"
-                    });
-                }
-            }
-
-            // Check if campaign exists if campaignId is provided
-            if (campaignId) {
-                const campaign = await Campaign.findById(campaignId);
-                if (!campaign) {
-                    return res.status(404).json({
-                        success: false,
-                        message: "Campaign not found"
-                    });
-                }
-            }
-
+    
             // Create new session
             const userSession = new UserSession({
                 userId: user._id,
@@ -143,9 +121,9 @@ const UserSessionController = {
                 data: req.body.data || {},
                 status: 'active'
             });
-
+    
             await userSession.save();
-
+    
             // Update user with recent session info
             if (campaignId && !user.campaignId) {
                 user.campaignId = campaignId;
@@ -158,7 +136,7 @@ const UserSessionController = {
             }
             user.lastActivityAt = new Date();
             await user.save();
-
+    
             // Log activity
             await logActivity({
                 actorId: user._id,
@@ -170,12 +148,12 @@ const UserSessionController = {
                 description: `New user session started for workflow: ${workflow.name}`,
                 adminId: adminId || workflow.adminId
             });
-
+    
             // Create notification for admin or agent if assigned
             const notificationRecipient = agentId 
                 ? { forAgent: agentId, forAdmin: adminId || workflow.adminId }
                 : { forAdmin: adminId || workflow.adminId };
-
+    
             await createNotification({
                 title: "New User Session Started",
                 description: `A new session has started for user ${user.name || user.phone}`,
@@ -188,12 +166,11 @@ const UserSessionController = {
                 },
                 actionUrl: `/sessions/${userSession._id}`
             });
-
-            // ADD THIS SECTION - Execute the first workflow node
-            // Import the workflow execution function from MessageController
+    
+            // IMPORTANT: Execute the first workflow node
             const { executeWorkflowNode } = require('../services/workflowExecutor');
             await executeWorkflowNode(userSession, workflow.startNodeId);
-
+    
             return res.status(201).json({
                 success: true,
                 message: "User session created successfully",

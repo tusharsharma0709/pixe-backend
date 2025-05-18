@@ -30,6 +30,7 @@ const handleFormDataRequest = async (req, res, endpoint, fieldName) => {
 };
 
 module.exports = {
+  // Original endpoints
   emiratesIdOCR: (req, res) => handleFormDataRequest(req, res, '/api/ocr/emirates-id', 'file'),
   emiratesIdVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/emirates-id/verify'),
   uaeTradeLicense: (req, res) => handleFormDataRequest(req, res, '/api/v1/trade-license/verify', 'file'),
@@ -42,9 +43,11 @@ module.exports = {
   epfoPassbook: (req, res) => handleJSONRequest(req, res, '/api/v1/epfo-passbook'),
   form26AS: (req, res) => handleJSONRequest(req, res, '/api/v1/itr/form-26as'),
   incomeTaxReturn: (req, res) => handleJSONRequest(req, res, '/api/v1/itr/verify'),
+  
+  // Updated/added endpoints for KYC workflow
   panVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/pan/pan'),
   panComprehensive: (req, res) => handleJSONRequest(req, res, '/api/v1/pan/pan-comprehensive'),
-  aadhaarToPan: (req, res) => handleJSONRequest(req, res, '/api/v1/pan/aadhaar-pan-link-check'),
+  aadhaarToPan: (req, res) => handleJSONRequest(req, res, '/api/v1/pan/aadhaar-pan-link-check'), // Renamed for clarity
   panValidation: (req, res) => handleJSONRequest(req, res, '/api/v1/pan/validate'),
   aadhaarVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/aadhaar-validation/aadhaar-validation'),
   voterIdVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/voter-id/verify'),
