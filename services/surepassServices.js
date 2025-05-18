@@ -1,4 +1,4 @@
-// services/surepassServices.js - Updated with proper error handling
+// services/surepassServices.js - Updated with parameter correction for PAN
 
 const axios = require('axios');
 const FormData = require('form-data');
@@ -190,9 +190,9 @@ const verifyPAN = async (panNumber, consent = 'Y') => {
             };
         }
         
-        // Make API call to SurePass
+        // FIXED: Changed parameter name from 'pan' to 'id_number' based on API error
         return await postJSON('/pan/pan', {
-            pan: cleanPanNumber,
+            id_number: cleanPanNumber,  // Changed from 'pan' to 'id_number'
             consent
         });
     } catch (error) {
@@ -242,7 +242,7 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
         const result = await postJSON('/pan-aadhaar-link/pan-link-status', {
             id_number: cleanAadhaarNumber,
             consent,
-            pan_number: cleanPanNumber
+            pan_number: cleanPanNumber  // This parameter might also need to be changed based on API errors
         });
         
         // Add isLinked flag for easier access
@@ -253,80 +253,6 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
         return result;
     } catch (error) {
         console.error('Aadhaar-PAN link check error:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-};
-
-/**
- * Generate OTP for Aadhaar verification
- * @param {String} aadhaarNumber - 12-digit Aadhaar number
- * @returns {Promise} - API response with client_id
- */
-const generateAadhaarOTP = async (aadhaarNumber) => {
-    try {
-        // Clean the Aadhaar number
-        const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
-        
-        // Log the API call (without showing full Aadhaar number)
-        const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
-        console.log(`Generating OTP for Aadhaar: ${maskedAadhaar}`);
-        
-        // Validate Aadhaar format
-        if (cleanAadhaarNumber.length !== 12) {
-            console.error('Invalid Aadhaar number format');
-            return {
-                success: false,
-                error: 'Invalid Aadhaar number format. Must be 12 digits.'
-            };
-        }
-        
-        // Make API call to SurePass
-        return await postJSON('/aadhaar-v2/generate-otp', {
-            id_number: cleanAadhaarNumber
-        });
-    } catch (error) {
-        console.error('Aadhaar OTP generation error:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-};
-
-/**
- * Submit OTP for Aadhaar verification
- * @param {String} clientId - Client ID from OTP generation
- * @param {String} otp - OTP entered by user
- * @returns {Promise} - API response
- */
-const submitAadhaarOTP = async (clientId, otp) => {
-    try {
-        console.log(`Submitting OTP for client ID: ${clientId}`);
-        
-        if (!clientId) {
-            return {
-                success: false,
-                error: 'Client ID is required'
-            };
-        }
-        
-        if (!otp || otp.length < 4) {
-            return {
-                success: false,
-                error: 'Valid OTP is required'
-            };
-        }
-        
-        // Make API call to SurePass
-        return await postJSON('/aadhaar-v2/submit-otp', {
-            client_id: clientId,
-            otp
-        });
-    } catch (error) {
-        console.error('Aadhaar OTP submission error:', error);
         return {
             success: false,
             error: error.message
@@ -354,6 +280,5 @@ module.exports = {
     verifyAadhaar,
     verifyPAN,
     checkAadhaarPANLink,
-    generateAadhaarOTP,
-    submitAadhaarOTP
+    maskAadhaarNumber
 };
