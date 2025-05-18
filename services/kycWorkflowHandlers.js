@@ -648,28 +648,51 @@ async function checkAadhaarPanLink(sessionId) {
             throw new Error('User not found');
         }
         
-        // Get Aadhaar number from session data
+        // Get Aadhaar and PAN numbers from session data
         const rawAadhaarNumber = session.data.aadhaar_number;
+        const rawPanNumber = session.data.pan_number;
+        
         if (!rawAadhaarNumber) {
             throw new Error('Aadhaar number not found in session data');
         }
         
+        if (!rawPanNumber) {
+            throw new Error('PAN number not found in session data');
+        }
+        
         // Format numbers for API call (remove spaces, special characters)
         const aadhaarNumber = formatAadhaarNumber(rawAadhaarNumber);
+        const panNumber = formatPanNumber(rawPanNumber);
+        
         console.log(`🔢 Formatted Aadhaar: "${maskAadhaar(aadhaarNumber)}"`);
+        console.log(`🔢 Formatted PAN: "${panNumber}"`);
         
         if (aadhaarNumber.length !== 12) {
             throw new Error(`Invalid Aadhaar number format: ${maskAadhaar(aadhaarNumber)}`);
         }
         
-        // Check if Aadhaar is verified
+        if (panNumber.length !== 10) {
+            throw new Error(`Invalid PAN number format: ${panNumber}`);
+        }
+        
+        // Check if Aadhaar and PAN are already verified separately
         const aadhaarVerified = user.isAadhaarVerified;
-        if (!aadhaarVerified) {
-            console.log(`⚠️ Required verification not complete: Aadhaar verified: ${aadhaarVerified}`);
-            return {
-                success: false,
-                message: 'Aadhaar must be verified before checking linking status'
-            };
+        const panVerified = user.isPanVerified;
+        
+        if (!aadhaarVerified || !panVerified) {
+            console.log(`⚠️ Required verifications not complete: Aadhaar verified: ${aadhaarVerified}, PAN verified: ${panVerified}`);
+            if (!aadhaarVerified) {
+                return {
+                    success: false,
+                    message: 'Aadhaar must be verified before checking linking status'
+                };
+            }
+            if (!panVerified) {
+                return {
+                    success: false, 
+                    message: 'PAN must be verified before checking linking status'
+                };
+            }
         }
         
         // If running in test mode (no SurePass API), simulate verification
@@ -690,8 +713,7 @@ async function checkAadhaarPanLink(sessionId) {
                 responseData: {
                     success: true,
                     message: 'Test verification success',
-                    linking_status: true,
-                    reason: "linked",
+                    link_status: 'Y',
                     verification_id: `test-${Date.now()}`
                 },
                 verificationAttempts: [{
@@ -737,18 +759,44 @@ async function checkAadhaarPanLink(sessionId) {
         
         // Call SurePass API to check if Aadhaar and PAN are linked
         console.log(`📡 Calling SurePass API to check Aadhaar-PAN link`);
-        // NOTE: PAN number is not needed as per the API documentation and curl example
-        const result = await surepassServices.checkAadhaarPANLink(aadhaarNumber);
+        
+        // Make API call with BOTH Aadhaar and PAN numbers
+        const result = await surepassServices.checkAadhaarPANLink(aadhaarNumber, panNumber, 'Y');
         console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
+        console.log(`📡 Full API response: ${JSON.stringify(result.data, null, 2)}`);
         
         // Process API response
-        if (result && result.success && result.data) {
-            // Check if linked - using linking_status from the actual API response
-            const isLinked = result.isLinked || 
-                (result.data.linking_status === true) || 
-                (result.data.link_status === 'Y');
-                
-            console.log(`🔗 Link status: ${isLinked ? 'LINKED' : 'NOT LINKED'}`);
+        if (result && result.success) {
+            // IMPORTANT: Determine if linked based on API response format
+            // API might return different formats like:
+            // 1. { link_status: 'Y' } or { link_status: 'N' }
+            // 2. { linking_status: true/false }
+            // 3. { data: { link_status: 'Y' } }
+            // Or other formats
+            
+            // Try all possible paths to find the link status
+            let isLinked = false;
+            
+            if (result.data) {
+                if (typeof result.data.link_status !== 'undefined') {
+                    isLinked = result.data.link_status === 'Y' || result.data.link_status === true;
+                } else if (typeof result.data.linking_status !== 'undefined') {
+                    isLinked = result.data.linking_status === true || result.data.linking_status === 'Y';
+                } else if (result.data.data && typeof result.data.data.link_status !== 'undefined') {
+                    isLinked = result.data.data.link_status === 'Y' || result.data.data.link_status === true;
+                } else if (result.data.data && typeof result.data.data.linking_status !== 'undefined') {
+                    isLinked = result.data.data.linking_status === true || result.data.data.linking_status === 'Y';
+                } else if (result.data.link_check_status) {
+                    isLinked = result.data.link_check_status === 'linked' || result.data.link_check_status === true;
+                }
+            }
+            
+            // Check result.isLinked (this is set by our surepassServices.js)
+            if (typeof result.isLinked !== 'undefined') {
+                isLinked = result.isLinked;
+            }
+            
+            console.log(`🔗 Link status determined to be: ${isLinked ? 'LINKED' : 'NOT LINKED'}`);
             
             // Update verification with successful results
             linkVerification.status = 'completed';
@@ -774,7 +822,8 @@ async function checkAadhaarPanLink(sessionId) {
                 description: 'Aadhaar-PAN link verification completed successfully',
                 details: {
                     verificationType: 'aadhaar_pan_link',
-                    verificationMode: 'auto'
+                    verificationMode: 'auto',
+                    isLinked
                 },
                 status: 'success'
             });
