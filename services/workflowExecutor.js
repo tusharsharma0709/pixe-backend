@@ -8,6 +8,8 @@ const { Verification } = require('../models/Verifications');
 const whatsappService = require('./whatsappServices');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
+// Add import for GTM service - only new line at the top
+const kycGtmService = require('./kycGtmServices');
 
 // Store recently processed message IDs to prevent duplicate processing
 const recentProcessedMessages = new Map();
@@ -555,12 +557,38 @@ async function executeWorkflowNode(session, nodeId) {
                             }
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'aadhaar', result.success);
+                                    kycGtmService.pushDataLayerEvent(session, 'kyc_verification', {
+                                        step: 'aadhaar',
+                                        success: result.success
+                                    });
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                                // Non-blocking - continue despite GTM errors
+                            }
+                            
                         } catch (kycError) {
                             console.error('Error verifying Aadhaar:', kycError);
                             // Set verification to false on error
                             session.data.isAadhaarVerified = false;
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track failed verification in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'aadhaar', false);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
                             
                             // Go to error node if defined
                             if (node.errorNodeId) {
@@ -588,12 +616,33 @@ async function executeWorkflowNode(session, nodeId) {
                             }
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'aadhaar_otp_generate', result.success);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
+                            
                         } catch (kycError) {
                             console.error('Error generating Aadhaar OTP:', kycError);
                             // Set generation to false on error
                             session.data.isAadhaarOtpGenerated = false;
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track failed OTP generation in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'aadhaar_otp_generate', false);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
                             
                             // Go to error node if defined
                             if (node.errorNodeId) {
@@ -618,12 +667,33 @@ async function executeWorkflowNode(session, nodeId) {
                             session.data.isAadhaarValidated = result.success;
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'aadhaar_otp', result.success);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
+                            
                         } catch (kycError) {
                             console.error('Error verifying Aadhaar OTP:', kycError);
                             // Set verification to false on error
                             session.data.isAadhaarValidated = false;
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track failed OTP verification in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'aadhaar_otp', false);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
                             
                             // Go to error node if defined
                             if (node.errorNodeId) {
@@ -651,12 +721,33 @@ async function executeWorkflowNode(session, nodeId) {
                             }
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'pan', result.success);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
+                            
                         } catch (kycError) {
                             console.error('Error verifying PAN:', kycError);
                             // Set verification to false on error
                             session.data.isPanVerified = false;
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track failed PAN verification in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'pan', false);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
                             
                             // Go to error node if defined
                             if (node.errorNodeId) {
@@ -682,12 +773,34 @@ async function executeWorkflowNode(session, nodeId) {
                             session.data.isAadhaarPanLinked = result.success && result.isLinked;
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'aadhaar_pan_link', 
+                                        result.success && result.isLinked);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
+                            
                         } catch (kycError) {
                             console.error('Error checking Aadhaar-PAN link:', kycError);
                             // Set link verification to false on error
                             session.data.isAadhaarPanLinked = false;
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track failed Aadhaar-PAN link check in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'aadhaar_pan_link', false);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
                             
                             // Go to error node if defined
                             if (node.errorNodeId) {
@@ -716,12 +829,33 @@ async function executeWorkflowNode(session, nodeId) {
                             }
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'bank_account', result.success);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
+                            
                         } catch (kycError) {
                             console.error('Error verifying bank account:', kycError);
                             // Set verification to false on error
                             session.data.isBankVerified = false;
                             session.markModified('data');
                             await session.save();
+                            
+                            // Track failed bank verification in GTM - ADDED CODE
+                            try {
+                                const user = await User.findById(session.userId);
+                                if (user) {
+                                    await kycGtmService.trackKycStep(user, 'bank_account', false);
+                                }
+                            } catch (gtmError) {
+                                console.error('GTM tracking error:', gtmError);
+                            }
                             
                             // Go to error node if defined
                             if (node.errorNodeId) {
@@ -767,6 +901,35 @@ async function executeWorkflowNode(session, nodeId) {
                         };
                         
                         console.log(`✅ Retrieved verification status directly:`, verificationStatus);
+                        
+                        // Track overall KYC status in GTM - ADDED CODE
+                        try {
+                            // Calculate completion status
+                            const kycSteps = {
+                                aadhaar: verificationStatus.isAadhaarVerified,
+                                aadhaar_otp: verificationStatus.isAadhaarValidated,
+                                pan: verificationStatus.isPanVerified,
+                                aadhaar_pan_link: session.data?.isAadhaarPanLinked || false,
+                                bank_account: session.data?.isBankVerified || false
+                            };
+                            
+                            const totalSteps = Object.keys(kycSteps).length;
+                            const completedSteps = Object.values(kycSteps).filter(Boolean).length;
+                            const isComplete = completedSteps === totalSteps;
+                            
+                            // Track overall KYC status
+                            await kycGtmService.trackKycStep(user, 'overall', isComplete);
+                            
+                            // Track KYC completion percentage
+                            kycGtmService.pushDataLayerEvent(session, 'kyc_status_updated', {
+                                ...kycSteps,
+                                completion_percentage: Math.round((completedSteps / totalSteps) * 100),
+                                completed_steps: completedSteps,
+                                total_steps: totalSteps
+                            });
+                        } catch (gtmError) {
+                            console.error('GTM tracking error:', gtmError);
+                        }
                     } else {
                         // For other APIs, make actual HTTP call
                         
@@ -871,6 +1034,44 @@ async function executeWorkflowNode(session, nodeId) {
                 
             case 'end':
                 console.log(`  Reached end node`);
+                
+                // Track workflow completion in GTM - ADDED CODE
+                try {
+                    // Track overall workflow completion
+                    const user = await User.findById(session.userId);
+                    if (user && workflow.name.toLowerCase().includes('kyc')) {
+                        // Get KYC status
+                        const kycStatus = {
+                            isAadhaarVerified: user.isAadhaarVerified || false,
+                            isAadhaarValidated: user.isAadhaarValidated || false,
+                            isPanVerified: user.isPanVerified || false,
+                            isAadhaarPanLinked: session.data?.isAadhaarPanLinked || false,
+                            isBankVerified: session.data?.isBankVerified || false
+                        };
+                        
+                        // Calculate completion percentage
+                        const steps = Object.keys(kycStatus);
+                        const completedSteps = steps.filter(step => kycStatus[step]).length;
+                        const isComplete = completedSteps === steps.length;
+                        
+                        // Track final KYC status
+                        await kycGtmService.trackKycStep(user, 'workflow_complete', isComplete);
+                        
+                        // Push dataLayer event with final status
+                        kycGtmService.pushDataLayerEvent(session, 'kyc_workflow_completed', {
+                            ...kycStatus,
+                            completion_percentage: Math.round((completedSteps / steps.length) * 100),
+                            completed_steps: completedSteps,
+                            total_steps: steps.length,
+                            start_time: session.startedAt,
+                            completion_time: new Date(),
+                            duration_ms: new Date() - session.startedAt
+                        });
+                    }
+                } catch (gtmError) {
+                    console.error('GTM tracking error at workflow completion:', gtmError);
+                }
+                
                 // Mark session as completed
                 session.status = 'completed';
                 session.completedAt = new Date();

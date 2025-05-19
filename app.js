@@ -63,7 +63,9 @@ const statisticsRoutes = require('./routes/statisticsRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const fileUploadRoutes = require('./routes/uploadFileRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
-const messageRoutes = require('./routes/messageRoutes')
+const messageRoutes = require('./routes/messageRoutes');
+const trackingRoutes = require('./routes/trackingRoutes');
+const gtmRoutes = require('./routes/gtmRoutes')
 
 
 // Security middlewares
@@ -160,6 +162,8 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/files', fileUploadRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/message', messageRoutes);
+app.use('/api/tracking', trackingRoutes);
+app.use('/api/gtm', gtmRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
