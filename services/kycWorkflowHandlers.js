@@ -1612,7 +1612,6 @@ async function verifyBankAccount(sessionId) {
 }
 
 module.exports = {
-    verifyAadhaar,
     verifyPAN,
     checkAadhaarPanLink,
     generateAadhaarOTP,
