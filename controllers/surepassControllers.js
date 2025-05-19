@@ -1,8 +1,10 @@
-const { postJSON, postFormData } = require('../services/surepassServices');
+// controllers/surepassControllers.js - Updated with Aadhaar OTP and Bank Verification
+
+const surepassServices = require('../services/surepassServices');
 
 const handleJSONRequest = async (req, res, endpoint) => {
   try {
-    const data = await postJSON(endpoint, req.body);
+    const data = await surepassServices.postJSON(endpoint, req.body);
     res.status(200).json(data);
   } catch (err) {
     console.error(`Error in ${endpoint}:`, err.message || err);
@@ -18,13 +20,88 @@ const handleFormDataRequest = async (req, res, endpoint, fieldName) => {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'File is required' });
 
-    const data = await postFormData(endpoint, file.buffer, fieldName);
+    const data = await surepassServices.postFormData(endpoint, file.buffer, fieldName);
     res.status(200).json(data);
   } catch (err) {
     console.error(`Error in ${endpoint}:`, err.message || err);
     res.status(500).json({ 
       error: err.message || 'An error occurred during the API request',
       endpoint: endpoint
+    });
+  }
+};
+
+// Generate Aadhaar OTP for verification
+const generateAadhaarOTP = async (req, res) => {
+  try {
+    const { id_number } = req.body;
+    
+    if (!id_number) {
+      return res.status(400).json({ 
+        error: 'Aadhaar number (id_number) is required' 
+      });
+    }
+    
+    // Call the generateAadhaarOTP function from surepassServices
+    const result = await surepassServices.generateAadhaarOTP(id_number);
+    
+    // Return the API response
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in aadhaar-otp-generate:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/aadhaar-v2/generate-otp' 
+    });
+  }
+};
+
+// Verify Aadhaar OTP 
+const verifyAadhaarOTP = async (req, res) => {
+  try {
+    const { client_id, otp } = req.body;
+    
+    if (!client_id || !otp) {
+      return res.status(400).json({ 
+        error: 'Client ID and OTP are required' 
+      });
+    }
+    
+    // Call the verifyAadhaarOTP function from surepassServices
+    const result = await surepassServices.verifyAadhaarOTP(client_id, otp);
+    
+    // Return the API response
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in aadhaar-otp-verify:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/aadhaar-v2/submit-otp' 
+    });
+  }
+};
+
+// Verify bank account
+const verifyBankAccount = async (req, res) => {
+  try {
+    const { id_number, ifsc, name, ifsc_details = true } = req.body;
+    
+    if (!id_number || !ifsc) {
+      return res.status(400).json({ 
+        error: 'Account number (id_number) and IFSC code are required' 
+      });
+    }
+    
+    // Call the verifyBankAccount function from surepassServices
+    const result = await surepassServices.verifyBankAccount(id_number, ifsc, name, ifsc_details);
+    
+    // Return the API response
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in bank-account-verify:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/bank-verification/' 
     });
   }
 };
@@ -70,5 +147,10 @@ module.exports = {
   tanVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/tan/verify'),
   udyogVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/udyog/verify'),
   udyamVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/udyam/verify'),
-  iecVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/iec/verify')
+  iecVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/iec/verify'),
+  
+  // New endpoints for Aadhaar OTP and Bank Account Verification
+  generateAadhaarOTP,
+  verifyAadhaarOTP,
+  verifyBankAccount
 };

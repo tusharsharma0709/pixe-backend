@@ -1,4 +1,4 @@
-// services/workflowExecutor.js - Updated for Direct Aadhaar and PAN Verification
+// services/workflowExecutor.js - Updated with Enhanced KYC Verification Nodes
 
 const { Message } = require('../models/Messages');
 const { Workflow } = require('../models/Workflows');
@@ -529,6 +529,69 @@ async function executeWorkflowNode(session, nodeId) {
                             throw kycError;
                         }
                     }
+                    else if (node.apiEndpoint === '/api/verification/aadhaar-otp-generate') {
+                        console.log('  🔍 Special handling for Aadhaar OTP generation');
+                        
+                        try {
+                            // Import KYC handlers dynamically to avoid circular dependencies
+                            const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                            
+                            // Generate Aadhaar OTP
+                            const result = await kycWorkflowHandlers.generateAadhaarOTP(session._id);
+                            console.log('  Aadhaar OTP generation result:', result);
+                            
+                            // Store result in session data
+                            session.data.aadhaarOtpGenerationResult = result;
+                            session.data.isAadhaarOtpGenerated = result.success;
+                            if (result.success && result.data?.client_id) {
+                                session.data.aadhaarClientId = result.data.client_id;
+                            }
+                            session.markModified('data');
+                            await session.save();
+                        } catch (kycError) {
+                            console.error('Error generating Aadhaar OTP:', kycError);
+                            // Set generation to false on error
+                            session.data.isAadhaarOtpGenerated = false;
+                            session.markModified('data');
+                            await session.save();
+                            
+                            // Go to error node if defined
+                            if (node.errorNodeId) {
+                                return executeWorkflowNode(session, node.errorNodeId);
+                            }
+                            throw kycError;
+                        }
+                    }
+                    else if (node.apiEndpoint === '/api/verification/aadhaar-otp-verify') {
+                        console.log('  🔍 Special handling for Aadhaar OTP verification');
+                        
+                        try {
+                            // Import KYC handlers dynamically to avoid circular dependencies
+                            const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                            
+                            // Verify Aadhaar OTP
+                            const result = await kycWorkflowHandlers.verifyAadhaarOTP(session._id);
+                            console.log('  Aadhaar OTP verification result:', result);
+                            
+                            // Store result in session data
+                            session.data.aadhaarOtpVerificationResult = result;
+                            session.data.isAadhaarValidated = result.success;
+                            session.markModified('data');
+                            await session.save();
+                        } catch (kycError) {
+                            console.error('Error verifying Aadhaar OTP:', kycError);
+                            // Set verification to false on error
+                            session.data.isAadhaarValidated = false;
+                            session.markModified('data');
+                            await session.save();
+                            
+                            // Go to error node if defined
+                            if (node.errorNodeId) {
+                                return executeWorkflowNode(session, node.errorNodeId);
+                            }
+                            throw kycError;
+                        }
+                    }
                     else if (node.apiEndpoint === '/api/verification/pan-validate') {
                         console.log('  🔍 Special handling for direct PAN verification');
                         
@@ -582,6 +645,40 @@ async function executeWorkflowNode(session, nodeId) {
                             console.error('Error checking Aadhaar-PAN link:', kycError);
                             // Set link verification to false on error
                             session.data.isAadhaarPanLinked = false;
+                            session.markModified('data');
+                            await session.save();
+                            
+                            // Go to error node if defined
+                            if (node.errorNodeId) {
+                                return executeWorkflowNode(session, node.errorNodeId);
+                            }
+                            throw kycError;
+                        }
+                    }
+                    else if (node.apiEndpoint === '/api/verification/bank-account') {
+                        console.log('  🔍 Special handling for bank account verification');
+                        
+                        try {
+                            // Import KYC handlers dynamically to avoid circular dependencies
+                            const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                            
+                            // Verify bank account
+                            const result = await kycWorkflowHandlers.verifyBankAccount(session._id);
+                            console.log('  Bank account verification result:', result);
+                            
+                            // Store result in session data
+                            session.data.bankVerificationResult = result;
+                            session.data.isBankVerified = result.success;
+                            if (result.success && result.data) {
+                                session.data.bankName = result.data.bankName;
+                                session.data.accountHolderName = result.data.accountHolderName;
+                            }
+                            session.markModified('data');
+                            await session.save();
+                        } catch (kycError) {
+                            console.error('Error verifying bank account:', kycError);
+                            // Set verification to false on error
+                            session.data.isBankVerified = false;
                             session.markModified('data');
                             await session.save();
                             

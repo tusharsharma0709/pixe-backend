@@ -1,4 +1,4 @@
-// services/surepassServices.js - Corrected with exact API endpoints and params
+// services/surepassServices.js
 
 const axios = require('axios');
 const FormData = require('form-data');
@@ -168,6 +168,75 @@ const verifyAadhaar = async (aadhaarNumber, consent = 'Y') => {
 };
 
 /**
+ * Generate OTP for Aadhaar verification
+ * @param {String} aadhaarNumber - 12-digit Aadhaar number
+ * @returns {Promise} - API response with client_id for OTP verification
+ */
+const generateAadhaarOTP = async (aadhaarNumber) => {
+    try {
+        // Clean the Aadhaar number - remove spaces and any non-numeric characters
+        const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
+        
+        // Log the API call (without showing full Aadhaar number)
+        const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
+        console.log(`Generating OTP for Aadhaar: ${maskedAadhaar}`);
+        
+        // Validate Aadhaar format
+        if (cleanAadhaarNumber.length !== 12) {
+            console.error('Invalid Aadhaar number format');
+            return {
+                success: false,
+                error: 'Invalid Aadhaar number format. Must be 12 digits.'
+            };
+        }
+        
+        // Make API call to SurePass
+        return await postJSON('/aadhaar-v2/generate-otp', {
+            id_number: cleanAadhaarNumber
+        });
+    } catch (error) {
+        console.error('Aadhaar OTP generation error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * Verify Aadhaar OTP
+ * @param {String} clientId - Client ID received from generate-otp response
+ * @param {String} otp - OTP entered by user
+ * @returns {Promise} - API response with verification details
+ */
+const verifyAadhaarOTP = async (clientId, otp) => {
+    try {
+        // Validate parameters
+        if (!clientId || !otp) {
+            console.error('Missing client_id or OTP');
+            return {
+                success: false,
+                error: 'Client ID and OTP are required.'
+            };
+        }
+        
+        console.log(`Verifying OTP for client ID: ${clientId}`);
+        
+        // Make API call to SurePass
+        return await postJSON('/aadhaar-v2/submit-otp', {
+            client_id: clientId,
+            otp: otp
+        });
+    } catch (error) {
+        console.error('Aadhaar OTP verification error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
  * Verify PAN by number
  * @param {String} panNumber - 10-character PAN number
  * @param {String} consent - Consent flag (Y/N)
@@ -204,7 +273,6 @@ const verifyPAN = async (panNumber, consent = 'Y') => {
     }
 };
 
-/**
 /**
  * Check Aadhaar-PAN link
  * @param {String} aadhaarNumber - 12-digit Aadhaar number
@@ -261,6 +329,54 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
 };
 
 /**
+ * Verify Bank Account
+ * @param {String} accountNumber - Bank account number
+ * @param {String} ifsc - IFSC code
+ * @param {String} accountHolderName - Optional account holder name for name matching
+ * @param {Boolean} fetchIfscDetails - Whether to fetch IFSC details
+ * @returns {Promise} - API response
+ */
+const verifyBankAccount = async (accountNumber, ifsc, accountHolderName = '', fetchIfscDetails = true) => {
+    try {
+        // Clean inputs
+        const cleanAccountNumber = accountNumber.replace(/\s/g, '');
+        const cleanIfsc = ifsc.replace(/\s/g, '').toUpperCase();
+        
+        // Validate inputs
+        if (!cleanAccountNumber || !cleanIfsc) {
+            console.error('Missing account number or IFSC code');
+            return {
+                success: false,
+                error: 'Account number and IFSC code are required.'
+            };
+        }
+        
+        console.log(`Verifying bank account: ${cleanAccountNumber.substring(0, 4)}XXXX${cleanAccountNumber.slice(-4)} with IFSC: ${cleanIfsc}`);
+        
+        // Prepare request payload
+        const requestPayload = {
+            id_number: cleanAccountNumber,
+            ifsc: cleanIfsc,
+            ifsc_details: fetchIfscDetails
+        };
+        
+        // Add account holder name if provided
+        if (accountHolderName) {
+            requestPayload.name = accountHolderName;
+        }
+        
+        // Make API call to SurePass
+        return await postJSON('/bank-verification/', requestPayload);
+    } catch (error) {
+        console.error('Bank account verification error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
  * Helper function to mask Aadhaar number for logging purposes
  * @param {String} aadhaarNumber - Aadhaar number to mask
  * @returns {String} - Masked Aadhaar number
@@ -280,5 +396,8 @@ module.exports = {
     verifyAadhaar,
     verifyPAN,
     checkAadhaarPANLink,
-    maskAadhaarNumber
+    maskAadhaarNumber,
+    generateAadhaarOTP,
+    verifyAadhaarOTP,
+    verifyBankAccount
 };
