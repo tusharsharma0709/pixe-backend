@@ -4,9 +4,9 @@ const { broadcastTrackingEvent } = require('./trackingEventEmitters');
 const mongoose = require('mongoose');
 
 // Default GTM configuration from env variables
-const DEFAULT_ACCOUNT_ID = process.env.GTM_ACCOUNT_ID;
-const DEFAULT_CONTAINER_ID = process.env.GTM_CONTAINER_ID;
-const DEFAULT_WORKSPACE_ID = process.env.GTM_WORKSPACE_ID || 'default';
+const DEFAULT_ACCOUNT_ID = process.env.DEFAULT_ACCOUNT_ID;
+const DEFAULT_CONTAINER_ID = process.env.DEFAULT_CONTAINER_ID;
+const DEFAULT_WORKSPACE_ID = process.env.DEFAULT_WORKSPACE_ID || 'default';
 
 // MongoDB model for tracking events
 const TrackingEventSchema = new mongoose.Schema({
@@ -286,8 +286,8 @@ async function updateKycStepTag(kycStep, userId, isCompleted = false) {
 async function setupKycGtmComponents() {
     try {
         // Create necessary GTM components if not exist
-        const accountId = process.env.DEFAULT_ACCOUNT_ID;
-        const containerId = process.env.DEFAULT_CONTAINER_ID;
+        const accountId = DEFAULT_ACCOUNT_ID;
+        const containerId = DEFAULT_CONTAINER_ID;
         
         if (!accountId || !containerId) {
             console.log('GTM configuration missing. KYC tracking in GTM will be disabled.');
