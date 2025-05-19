@@ -7,6 +7,7 @@ const mongoose = require('mongoose');
 const DEFAULT_ACCOUNT_ID = process.env.DEFAULT_ACCOUNT_ID;
 const DEFAULT_CONTAINER_ID = process.env.DEFAULT_CONTAINER_ID;
 const DEFAULT_WORKSPACE_ID = process.env.DEFAULT_WORKSPACE_ID || 'default';
+const GA4_MEASUREMENT_ID = process.env.GA4_MEASUREMENT_ID || '{{GA4_MEASUREMENT_ID}}';
 
 // MongoDB model for tracking events
 const TrackingEventSchema = new mongoose.Schema({
@@ -186,6 +187,11 @@ function pushDataLayerEvent(session, eventName, eventData = {}) {
  */
 async function updateKycStepTag(kycStep, userId, isCompleted = false) {
   try {
+    // Check if GA4 measurement ID is available
+    if (!GA4_MEASUREMENT_ID || GA4_MEASUREMENT_ID === '{{GA4_MEASUREMENT_ID}}') {
+      console.warn('GA4 measurement ID not configured properly. Tag creation may fail.');
+    }
+    
     // Configure tag parameters
     const tagName = `KYC_${kycStep.toUpperCase()}_${userId}`;
     const tagType = 'customEvent';
@@ -281,6 +287,12 @@ async function updateKycStepTag(kycStep, userId, isCompleted = false) {
           type: 'template',
           value: `kyc_${kycStep}_verification`
         },
+        // Add the required measurementIdOverride parameter
+        {
+          key: 'measurementIdOverride',
+          type: 'template',
+          value: GA4_MEASUREMENT_ID
+        },
         {
           key: 'eventParameters',
           type: 'list',
@@ -369,9 +381,66 @@ async function updateKycStepTag(kycStep, userId, isCompleted = false) {
       return newTag;
     }
   } catch (error) {
-    console.error('Error updating KYC GTM tag:', error);
-    console.error('Error details:', error.stack);
+    if (error.message && error.message.includes('measurementIdOverride')) {
+      console.error('Missing GA4 measurement ID. Please ensure GA4_MEASUREMENT_ID is configured in your environment.');
+    } else {
+      console.error('Error updating KYC GTM tag:', error);
+      console.error('Error details:', error.stack);
+    }
     // Non-blocking - don't throw errors from tracking
+  }
+}
+
+/**
+ * Create a KYC event trigger
+ * @param {string} triggerName - The name of the trigger
+ * @param {string} eventName - The event name to trigger on
+ * @returns {Promise<Object>} - Created trigger
+ */
+async function createKycEventTrigger(triggerName, eventName) {
+  try {
+    const accountId = DEFAULT_ACCOUNT_ID;
+    const containerId = DEFAULT_CONTAINER_ID;
+    const workspaceId = DEFAULT_WORKSPACE_ID;
+    
+    if (!accountId || !containerId) {
+      console.error('GTM configuration missing. Unable to create trigger.');
+      return null;
+    }
+    
+    const triggerData = {
+      name: triggerName,
+      type: 'customEvent',
+      customEventFilter: [
+        {
+          type: 'equals',
+          parameter: [
+            {
+              key: 'arg0',
+              type: 'template',
+              value: '{{_event}}'
+            },
+            {
+              key: 'arg1',
+              type: 'template',
+              value: eventName
+            }
+          ]
+        }
+      ]
+    };
+    
+    const trigger = await gtmService.createTrigger(
+      accountId,
+      containerId,
+      workspaceId,
+      triggerData
+    );
+    
+    return trigger;
+  } catch (error) {
+    console.error('Error creating KYC event trigger:', error);
+    return null;
   }
 }
 
