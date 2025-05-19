@@ -513,8 +513,8 @@ async function generateAadhaarOTP(sessionId) {
         
         // Process API response
         if (result && result.success) {
-            // Extract client ID
-            const clientId = result.data?.client_id;
+            // Extract client ID - FIXED: Use the correct path
+            const clientId = result.data?.data?.client_id;
             
             if (!clientId) {
                 return {
