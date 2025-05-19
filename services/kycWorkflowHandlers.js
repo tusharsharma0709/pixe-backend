@@ -127,13 +127,13 @@ const maskAccountNumber = (accountNumber) => {
 };
 
 /**
- * Verify Aadhaar number
+ * Verify Aadhaar OTP
  * @param {String} sessionId - The session ID
- * @returns {Promise<Object>} - Verification result
+ * @returns {Promise<Object>} - OTP verification result
  */
-async function verifyAadhaar(sessionId) {
+async function verifyAadhaarOTP(sessionId) {
     try {
-        console.log(`\n🔍 Verifying Aadhaar for session ${sessionId}`);
+        console.log(`\n🔍 Verifying Aadhaar OTP for session ${sessionId}`);
         
         // Get session data
         const session = await UserSession.findById(sessionId);
@@ -151,195 +151,105 @@ async function verifyAadhaar(sessionId) {
             throw new Error('User not found');
         }
         
-        // Get Aadhaar number from session data and format it
-        const rawAadhaarNumber = session.data.aadhaar_number;
-        if (!rawAadhaarNumber) {
-            throw new Error('Aadhaar number not found in session data');
+        // Get OTP from session data
+        const otp = session.data.aadhaar_otp;
+        if (!otp) {
+            throw new Error('OTP not found in session data');
         }
         
-        console.log(`🔢 Raw Aadhaar input: "${rawAadhaarNumber}"`);
+        // Get client ID from session data - FIXED: Check both variable names
+        // Debug session data to help diagnose issues
+        console.log('DEBUG: Session data keys for OTP verification:', Object.keys(session.data || {}));
+        console.log('DEBUG: aadhaar_client_id =', session.data.aadhaar_client_id);
+        console.log('DEBUG: aadhaarClientId =', session.data.aadhaarClientId);
         
-        // Store original format for display purposes (with spaces)
-        const displayAadhaar = formatAadhaarDisplay(rawAadhaarNumber);
-        // Get digits only for verification
-        const aadhaarNumber = formatAadhaarNumber(rawAadhaarNumber);
-        
-        console.log(`🔢 Formatted Aadhaar: "${maskAadhaar(displayAadhaar)}"`);
-        
-        if (aadhaarNumber.length !== 12) {
-            throw new Error(`Invalid Aadhaar number format: ${maskAadhaar(aadhaarNumber)}`);
+        // Try both variable names for client ID
+        const clientId = session.data.aadhaar_client_id || session.data.aadhaarClientId;
+        if (!clientId) {
+            throw new Error('Client ID not found in session data. Please generate OTP first.');
         }
         
-        // Get name from session or user data
-        const name = session.data.full_name || user.name;
+        console.log(`🔢 Verifying OTP "${otp}" for client ID: ${clientId}`);
         
-        // If running in test mode (no SurePass API), simulate verification
+        // Get verification record - FIXED: Check both variable names
+        let verification = await Verification.findOne({
+            userId: session.userId,
+            verificationType: 'aadhaar',
+            referenceId: clientId
+        });
+        
+        // If not found by referenceId, try finding by verificationType only
+        if (!verification) {
+            verification = await Verification.findOne({
+                userId: session.userId,
+                verificationType: 'aadhaar'
+            });
+            
+            // If found, update the referenceId
+            if (verification) {
+                verification.referenceId = clientId;
+                await verification.save();
+                console.log(`✅ Updated verification record with client ID: ${clientId}`);
+            } else {
+                throw new Error('Verification record not found. Please generate OTP first.');
+            }
+        }
+        
+        // Check if OTP is expired
+        if (verification.otp?.expiresAt && new Date() > verification.otp.expiresAt) {
+            return {
+                success: false,
+                message: 'OTP has expired. Please generate a new OTP.'
+            };
+        }
+        
+        // Increment OTP attempts
+        verification.otp = verification.otp || {};
+        verification.otp.attempts = (verification.otp.attempts || 0) + 1;
+        await verification.save();
+        
+        // If running in test mode (no SurePass API), simulate OTP verification
         const isTestMode = !process.env.SUREPASS_API_KEY || process.env.TEST_MODE === 'true';
         
         if (isTestMode) {
-            console.log('🧪 Running in TEST MODE - simulating successful verification');
+            console.log('🧪 Running in TEST MODE - simulating successful OTP verification');
             
-            // Create verification record
-            const verification = new Verification({
-                userId: session.userId,
-                verificationType: 'aadhaar',
-                mode: 'auto',
-                provider: 'test',
-                status: 'completed',
-                startedAt: new Date(),
-                completedAt: new Date(),
-                verificationDetails: {
-                    aadhaarNumber,
-                    aadhaarName: name || 'Test User',
-                    nameMatch: {
-                        status: true,
-                        score: 100,
-                        details: { matched: true, source: 'test_mode' }
-                    }
-                },
-                responseData: {
+            // Update verification record
+            verification.otp.verifiedAt = new Date();
+            verification.responseData = {
+                ...verification.responseData,
+                otpVerification: {
                     success: true,
-                    message: 'Test verification success',
-                    verification_id: `test-${Date.now()}`
-                },
-                verificationAttempts: [{
-                    attemptedAt: new Date(),
-                    status: 'success',
-                    data: { 
-                        mode: 'test',
-                        aadhaarNumber,
-                        aadhaarName: name || 'Test User'
-                    }
-                }]
-            });
-            
-            await verification.save();
-            console.log('✅ Test verification record created');
-            
-            // Update user
-            user.isAadhaarVerified = true;
-            await user.save();
-            console.log('✅ User record updated with isAadhaarVerified = true');
-            
-            return {
-                success: true,
-                message: 'Aadhaar verified successfully (TEST MODE)',
-                aadhaarName: name || 'Test User'
-            };
-        }
-        
-        // Create or update verification record
-        let verification = await Verification.findOne({
-            userId: session.userId,
-            verificationType: 'aadhaar'
-        });
-        
-        if (!verification) {
-            verification = new Verification({
-                userId: session.userId,
-                verificationType: 'aadhaar',
-                mode: 'auto',
-                provider: 'surepass',
-                status: 'in_progress',
-                verificationDetails: {
-                    aadhaarNumber,
-                    nameMatch: {
-                        status: null,
-                        score: null,
-                        details: {}
-                    }
-                }
-            });
-        } else {
-            verification.status = 'in_progress';
-            verification.verificationDetails = {
-                ...verification.verificationDetails,
-                aadhaarNumber,
-                nameMatch: verification.verificationDetails.nameMatch || {
-                    status: null,
-                    score: null,
-                    details: {}
-                }
-            };
-        }
-        
-        await verification.save();
-        console.log(`✅ Verification record created/updated with ID: ${verification._id}`);
-        
-        // Call SurePass API to verify Aadhaar
-        console.log(`📡 Calling SurePass API to verify Aadhaar number`);
-        const result = await surepassServices.verifyAadhaar(aadhaarNumber, 'Y');
-        console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
-        
-        // Process verification result
-        if (result && result.success) {
-            // Extract verification data
-            const aadhaarName = result.data?.name_on_card || result.data?.name || null;
-            console.log(`👤 Extracted name from Aadhaar: ${aadhaarName || 'Not available'}`);
-            
-            // Check name match if name is available
-            const namesMatch = !name || !aadhaarName || doNamesMatch(name, aadhaarName);
-            console.log(`🔍 Name match check: ${namesMatch ? 'PASSED' : 'FAILED'}`);
-            
-            if (!namesMatch) {
-                // Name mismatch
-                verification.status = 'failed';
-                verification.verificationDetails.nameMatch = {
-                    status: false,
-                    score: 0,
-                    details: {
-                        providedName: name,
-                        aadhaarName: aadhaarName,
-                        reason: 'Name mismatch'
-                    }
-                };
-                verification.verificationAttempts.push({
-                    attemptedAt: new Date(),
-                    status: 'failure',
-                    reason: 'Name mismatch',
+                    message: 'OTP verified successfully (TEST MODE)',
                     data: {
-                        providedName: name,
-                        aadhaarName
+                        client_id: clientId,
+                        full_name: user.name || 'Test User',
+                        aadhaar_number: verification.verificationDetails?.aadhaarNumber || '123456789012',
+                        dob: '2000-01-01',
+                        gender: 'M',
+                        address: {
+                            country: 'India',
+                            state: 'Test State',
+                            dist: 'Test District',
+                            po: 'Test PO',
+                            loc: 'Test Location',
+                            vtc: 'Test VTC',
+                            subdist: 'Test Subdistrict',
+                            street: 'Test Street',
+                            house: 'Test House',
+                            landmark: 'Test Landmark'
+                        },
+                        zip: '123456',
+                        has_image: false,
+                        status: 'success_aadhaar'
                     }
-                });
-                await verification.save();
-                
-                return {
-                    success: false,
-                    message: 'The name provided does not match the name registered with this Aadhaar number'
-                };
-            }
-            
-            // Update verification record with success
-            verification.status = 'completed';
-            verification.verificationDetails = {
-                ...verification.verificationDetails,
-                aadhaarName,
-                nameMatch: {
-                    status: true,
-                    score: 100,
-                    details: { matched: true }
                 }
             };
-            
-            verification.responseData = result.data;
-            verification.completedAt = new Date();
-            verification.verificationAttempts.push({
-                attemptedAt: new Date(),
-                status: 'success',
-                data: {
-                    aadhaarNumber,
-                    aadhaarName
-                }
-            });
-            
             await verification.save();
-            console.log(`✅ Verification record updated to COMPLETED status`);
             
-            // Update user verification status
-            user.isAadhaarVerified = true;
+            // Update user model
+            user.isAadhaarValidated = true;
             await user.save();
-            console.log(`✅ User record updated with isAadhaarVerified = true`);
             
             // Log activity
             await ActivityLog.create({
@@ -349,50 +259,94 @@ async function verifyAadhaar(sessionId) {
                 action: 'verification_completed',
                 entityType: 'Verification',
                 entityId: verification._id,
-                description: 'Aadhaar verification completed successfully',
+                description: 'Aadhaar OTP verification completed successfully',
                 details: {
-                    verificationType: 'aadhaar',
+                    verificationType: 'aadhaar_otp',
                     verificationMode: 'auto'
                 },
                 status: 'success'
             });
             
-            // Return success
             return {
                 success: true,
-                message: 'Aadhaar number verified successfully',
-                aadhaarName
-            };
-        } else {
-            // Handle failed verification
-            verification.status = 'failed';
-            verification.verificationDetails.nameMatch = {
-                status: false,
-                score: 0,
-                details: { 
-                    reason: result?.error || 'Verification failed',
-                    apiError: result?.error || 'Unknown error'
+                message: 'Aadhaar OTP verified successfully (TEST MODE)',
+                data: {
+                    isAadhaarValidated: true
                 }
             };
-            verification.verificationAttempts.push({
-                attemptedAt: new Date(),
-                status: 'failure',
-                reason: result?.error || 'Verification failed',
-                data: result
-            });
+        }
+        
+        // Call SurePass API to verify OTP
+        console.log(`📡 Calling SurePass API to verify Aadhaar OTP`);
+        const result = await surepassServices.verifyAadhaarOTP(clientId, otp);
+        console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
+        console.log(`Full API response for debugging:`, JSON.stringify(result, null, 2));
+        
+        // Process API response
+        if (result && result.success) {
+            // Update verification record
+            verification.otp.verifiedAt = new Date();
+            verification.responseData = {
+                ...verification.responseData,
+                otpVerification: result.data
+            };
             await verification.save();
-            console.log(`❌ Verification failed: ${result?.error || 'Unknown error'}`);
+            
+            // Update user model
+            user.isAadhaarValidated = true;
+            await user.save();
+            
+            // Extract user details if available
+            if (result.data && result.data.full_name) {
+                // Ensure verification details has the user's name
+                verification.verificationDetails = verification.verificationDetails || {};
+                verification.verificationDetails.aadhaarName = result.data.full_name;
+                await verification.save();
+                
+                // Update user's name if not set
+                if (!user.name && result.data.full_name) {
+                    user.name = result.data.full_name;
+                    await user.save();
+                }
+            }
+            
+            // Log activity
+            await ActivityLog.create({
+                actorId: user._id,
+                actorModel: 'Users',
+                actorName: user.name || user.phone,
+                action: 'verification_completed',
+                entityType: 'Verification',
+                entityId: verification._id,
+                description: 'Aadhaar OTP verification completed successfully',
+                details: {
+                    verificationType: 'aadhaar_otp',
+                    verificationMode: 'auto'
+                },
+                status: 'success'
+            });
             
             return {
+                success: true,
+                message: 'Aadhaar OTP verified successfully',
+                data: {
+                    isAadhaarValidated: true
+                }
+            };
+        } else {
+            // Handle API error
+            console.error('API error in OTP verification:', result?.error || 'Unknown error');
+            return {
                 success: false,
-                message: result?.error || 'Aadhaar verification failed'
+                message: result?.error || 'Failed to verify OTP',
+                error: result?.error || 'Invalid OTP'
             };
         }
     } catch (error) {
-        console.error('Error verifying Aadhaar:', error);
+        console.error('Error verifying Aadhaar OTP:', error);
         return {
             success: false,
-            message: error.message || 'Error verifying Aadhaar'
+            message: error.message || 'Error verifying Aadhaar OTP'
         };
     }
 }
@@ -505,8 +459,9 @@ async function generateAadhaarOTP(sessionId) {
                 await verification.save();
             }
             
-            // Update session data
+            // Update session data - STORE IN BOTH FORMATS for consistency
             session.data.aadhaar_client_id = testClientId;
+            session.data.aadhaarClientId = testClientId; // Also store in camelCase format
             session.markModified('data');
             await session.save();
             
@@ -586,8 +541,9 @@ async function generateAadhaarOTP(sessionId) {
                 await verification.save();
             }
             
-            // Update session data
+            // Update session data - STORE IN BOTH FORMATS for consistency
             session.data.aadhaar_client_id = clientId;
+            session.data.aadhaarClientId = clientId; // Also store in camelCase format
             session.markModified('data');
             await session.save();
             
@@ -1378,11 +1334,12 @@ async function verifyBankAccount(sessionId) {
             throw new Error(`Invalid IFSC code format: IFSC codes must be 11 characters`);
         }
         
-        // If running in test mode (no SurePass API), simulate verification
+        // Check for both test modes - general test mode or specific bank test mode
         const isTestMode = !process.env.SUREPASS_API_KEY || process.env.TEST_MODE === 'true';
+        const isBankTestMode = process.env.BANK_TEST_MODE === 'true';
         
-        if (isTestMode) {
-            console.log('🧪 Running in TEST MODE - simulating successful verification');
+        if (isTestMode || isBankTestMode) {
+            console.log('🧪 Running in TEST MODE - simulating successful bank verification');
             
             // Create verification record
             const verification = new Verification({
@@ -1483,7 +1440,7 @@ async function verifyBankAccount(sessionId) {
                 accountNumber,
                 ifscCode,
                 accountHolderName,
-                nameMatch: verification.verificationDetails.nameMatch || {
+                nameMatch: verification.verificationDetails?.nameMatch || {
                     status: null,
                     score: null,
                     details: {}
