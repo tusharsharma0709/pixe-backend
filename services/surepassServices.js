@@ -1,4 +1,4 @@
-// services/surepassServices.js
+// services/surepassServices.js - Updated with improved error handling and logging
 
 const axios = require('axios');
 const FormData = require('form-data');
@@ -191,9 +191,46 @@ const generateAadhaarOTP = async (aadhaarNumber) => {
         }
         
         // Make API call to SurePass
-        return await postJSON('/aadhaar-v2/generate-otp', {
+        const response = await postJSON('/aadhaar-v2/generate-otp', {
             id_number: cleanAadhaarNumber
         });
+        
+        // Debug the response structure
+        console.log('DEBUG: Full OTP generation response structure:', JSON.stringify(response, null, 2));
+        
+        // For debugging: Let's check all possible paths for client_id
+        if (response.success) {
+            let clientId = null;
+            
+            // Check direct path
+            if (response.data?.client_id) {
+                clientId = response.data.client_id;
+                console.log(`Found client_id at response.data.client_id: ${clientId}`);
+            }
+            // Check nested path
+            else if (response.data?.data?.client_id) {
+                clientId = response.data.data.client_id;
+                console.log(`Found client_id at response.data.data.client_id: ${clientId}`);
+            }
+            // Check if it's in a results array
+            else if (response.data?.results && Array.isArray(response.data.results) && response.data.results[0]?.client_id) {
+                clientId = response.data.results[0].client_id;
+                console.log(`Found client_id in results array: ${clientId}`);
+            }
+            
+            if (!clientId) {
+                console.error('Client ID not found in any expected location in the response');
+                console.log('Available keys in response.data:', Object.keys(response.data || {}));
+                if (response.data?.data) {
+                    console.log('Available keys in response.data.data:', Object.keys(response.data.data || {}));
+                }
+                
+                // Even though we didn't find client_id, return the original response
+                // to let the higher-level code handle this situation
+            }
+        }
+        
+        return response;
     } catch (error) {
         console.error('Aadhaar OTP generation error:', error);
         return {
@@ -221,12 +258,18 @@ const verifyAadhaarOTP = async (clientId, otp) => {
         }
         
         console.log(`Verifying OTP for client ID: ${clientId}`);
+        console.log(`OTP value: ${otp}`);
         
         // Make API call to SurePass
-        return await postJSON('/aadhaar-v2/submit-otp', {
+        const response = await postJSON('/aadhaar-v2/submit-otp', {
             client_id: clientId,
             otp: otp
         });
+        
+        // Debug the response structure
+        console.log('DEBUG: Full OTP verification response structure:', JSON.stringify(response, null, 2));
+        
+        return response;
     } catch (error) {
         console.error('Aadhaar OTP verification error:', error);
         return {
@@ -288,7 +331,7 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
         
         // Log the API call (without showing full Aadhaar number)
         const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
-        console.log(`Checking Aadhaar-PAN link: ${maskedAadhaar}`);
+        console.log(`Checking Aadhaar-PAN link: ${maskedAadhaar} with PAN: ${cleanPanNumber}`);
         
         // Validate inputs
         if (cleanAadhaarNumber.length !== 12) {
@@ -315,8 +358,14 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
             consent: cleanPanNumber // Based on the logs, 'consent' parameter is being used for PAN
         };
         
+        console.log(`DEBUG: API endpoint: /pan/aadhaar-pan-link-check`);
+        console.log(`DEBUG: Request body:`, JSON.stringify(requestBody, null, 2));
+        
         // Make API call to SurePass with correct endpoint from logs
         const result = await postJSON('/pan/aadhaar-pan-link-check', requestBody);
+        
+        // Debug the response structure
+        console.log('DEBUG: Full Aadhaar-PAN link response structure:', JSON.stringify(result, null, 2));
         
         return result;
     } catch (error) {
@@ -365,8 +414,15 @@ const verifyBankAccount = async (accountNumber, ifsc, accountHolderName = '', fe
             requestPayload.name = accountHolderName;
         }
         
+        console.log(`DEBUG: Bank verification request payload:`, JSON.stringify(requestPayload, null, 2));
+        
         // Make API call to SurePass
-        return await postJSON('/bank-verification/', requestPayload);
+        const response = await postJSON('/bank-verification/', requestPayload);
+        
+        // Debug the response structure
+        console.log('DEBUG: Full bank verification response structure:', JSON.stringify(response, null, 2));
+        
+        return response;
     } catch (error) {
         console.error('Bank account verification error:', error);
         return {

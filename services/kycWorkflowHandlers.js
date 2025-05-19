@@ -422,15 +422,10 @@ async function generateAadhaarOTP(sessionId) {
             throw new Error('User not found');
         }
         
-        // Check if Aadhaar is already verified first
-        if (!user.isAadhaarVerified) {
-            return {
-                success: false,
-                message: 'Please verify Aadhaar using OCR verification first'
-            };
-        }
+        // MODIFIED: Removed the check for Aadhaar verification
+        // This allows OTP to be generated without prior verification
         
-        // Check if already validated
+        // Check if already validated - this check is still useful
         if (user.isAadhaarValidated) {
             return {
                 success: true,
@@ -448,8 +443,7 @@ async function generateAadhaarOTP(sessionId) {
         if (!aadhaarNumber) {
             const verification = await Verification.findOne({
                 userId: session.userId,
-                verificationType: 'aadhaar',
-                status: 'completed'
+                verificationType: 'aadhaar'
             });
             
             if (verification && verification.verificationDetails?.aadhaarNumber) {
@@ -490,6 +484,25 @@ async function generateAadhaarOTP(sessionId) {
                     attempts: 0
                 };
                 await verification.save();
+            } else {
+                // Create a new verification record if none exists
+                verification = new Verification({
+                    userId: session.userId,
+                    verificationType: 'aadhaar',
+                    mode: 'auto',
+                    provider: 'test',
+                    status: 'in_progress',
+                    referenceId: testClientId,
+                    otp: {
+                        sentAt: new Date(),
+                        expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+                        attempts: 0
+                    },
+                    verificationDetails: {
+                        aadhaarNumber
+                    }
+                });
+                await verification.save();
             }
             
             // Update session data
@@ -510,13 +523,22 @@ async function generateAadhaarOTP(sessionId) {
         console.log(`📡 Calling SurePass API to generate Aadhaar OTP`);
         const result = await surepassServices.generateAadhaarOTP(aadhaarNumber);
         console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
+        console.log(`Full API response for debugging:`, JSON.stringify(result, null, 2));
         
         // Process API response
         if (result && result.success) {
-            // Extract client ID - FIXED: Use the correct path
-            const clientId = result.data?.data?.client_id;
+            // FIXED: Extract client ID by checking multiple possible paths in the response
+            let clientId = null;
+            
+            // Try multiple possible paths for client_id in the response
+            if (result.data?.data?.client_id) {
+                clientId = result.data.data.client_id;
+            } else if (result.data?.client_id) {
+                clientId = result.data.client_id;
+            }
             
             if (!clientId) {
+                console.error('Failed to extract client_id from response:', result);
                 return {
                     success: false,
                     message: 'Failed to get client ID from OTP generation response'
@@ -540,6 +562,28 @@ async function generateAadhaarOTP(sessionId) {
                     id_number: aadhaarNumber
                 };
                 await verification.save();
+            } else {
+                // Create a new verification record if none exists
+                verification = new Verification({
+                    userId: session.userId,
+                    verificationType: 'aadhaar',
+                    mode: 'auto',
+                    provider: 'surepass',
+                    status: 'in_progress',
+                    referenceId: clientId,
+                    otp: {
+                        sentAt: new Date(),
+                        expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+                        attempts: 0
+                    },
+                    requestData: {
+                        id_number: aadhaarNumber
+                    },
+                    verificationDetails: {
+                        aadhaarNumber
+                    }
+                });
+                await verification.save();
             }
             
             // Update session data
@@ -556,6 +600,7 @@ async function generateAadhaarOTP(sessionId) {
             };
         } else {
             // Handle API error
+            console.error('API error in OTP generation:', result?.error || 'Unknown error');
             return {
                 success: false,
                 message: result?.error || 'Failed to generate OTP',
@@ -608,7 +653,7 @@ async function verifyAadhaarOTP(sessionId) {
             throw new Error('Client ID not found in session data. Please generate OTP first.');
         }
         
-        console.log(`🔢 Verifying OTP for client ID: ${clientId}`);
+        console.log(`🔢 Verifying OTP "${otp}" for client ID: ${clientId}`);
         
         // Get verification record
         const verification = await Verification.findOne({
@@ -705,6 +750,7 @@ async function verifyAadhaarOTP(sessionId) {
         console.log(`📡 Calling SurePass API to verify Aadhaar OTP`);
         const result = await surepassServices.verifyAadhaarOTP(clientId, otp);
         console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
+        console.log(`Full API response for debugging:`, JSON.stringify(result, null, 2));
         
         // Process API response
         if (result && result.success) {
@@ -761,6 +807,7 @@ async function verifyAadhaarOTP(sessionId) {
             };
         } else {
             // Handle API error
+            console.error('API error in OTP verification:', result?.error || 'Unknown error');
             return {
                 success: false,
                 message: result?.error || 'Failed to verify OTP',
@@ -915,6 +962,7 @@ async function verifyPAN(sessionId) {
         console.log(`📡 Calling SurePass API to verify PAN number`);
         const result = await surepassServices.verifyPAN(panNumber, 'Y');
         console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
+        console.log(`Full API response for debugging:`, JSON.stringify(result, null, 2));
         
         // Process verification result
         if (result && result.success) {
@@ -1457,6 +1505,7 @@ async function verifyBankAccount(sessionId) {
         );
         
         console.log(`📡 SurePass API response received: ${result.success ? 'SUCCESS' : 'FAILURE'}`);
+        console.log(`Full API response for debugging:`, JSON.stringify(result, null, 2));
         
         // Process verification result
         if (result && result.success) {

@@ -1,4 +1,4 @@
-// services/workflowExecutor.js - Updated with Enhanced KYC Verification Nodes
+// services/workflowExecutor.js - Updated with Enhanced KYC Verification Nodes and Template Processing
 
 const { Message } = require('../models/Messages');
 const { Workflow } = require('../models/Workflows');
@@ -127,6 +127,62 @@ function evaluateCondition(condition, data) {
     } catch (error) {
         console.error('Error evaluating condition:', error);
         return false;
+    }
+}
+
+/**
+ * Process template expressions in content
+ * @param {String} content - Template content with expressions
+ * @param {Object} data - Data object with values for replacement
+ * @returns {String} - Processed content with evaluated expressions
+ */
+function processTemplate(content, data) {
+    if (!content || !data) return content;
+    
+    try {
+        let processedContent = content;
+        
+        // First, replace simple variables with {{ variable }}
+        for (const [key, value] of Object.entries(data)) {
+            if (value !== undefined && value !== null) {
+                const regex = new RegExp(`{{\\s*${key}\\s*}}`, 'g');
+                processedContent = processedContent.replace(regex, value);
+            }
+        }
+        
+        // Then, process conditional expressions with {{ condition ? 'trueValue' : 'falseValue' }}
+        const conditionalRegex = /{{([^{}]+)\s*\?\s*['"]([^'"]+)['"]\s*:\s*['"]([^'"]+)['"]}}|{{([^{}]+)\s*\?\s*['"]([^'"]+)['"]\s*:\s*['"]([^'"]+)['"]}}/g;
+        
+        processedContent = processedContent.replace(conditionalRegex, (match, cond1, trueVal1, falseVal1, cond2, trueVal2, falseVal2) => {
+            const condition = cond1 || cond2;
+            const trueValue = trueVal1 || trueVal2;
+            const falseValue = falseVal1 || falseVal2;
+            
+            try {
+                // Try to evaluate the condition based on the data object
+                const condTrimmed = condition.trim();
+                
+                // Check if condition is just a variable name
+                if (data[condTrimmed] !== undefined) {
+                    return data[condTrimmed] ? trueValue : falseValue;
+                }
+                
+                // Otherwise, try to evaluate the condition
+                if (evaluateCondition(condTrimmed, data)) {
+                    return trueValue;
+                } else {
+                    return falseValue;
+                }
+            } catch (error) {
+                console.error(`Error evaluating template condition "${condition}":`, error);
+                return match; // Return the original expression if evaluation fails
+            }
+        });
+        
+        return processedContent;
+    } catch (error) {
+        console.error('Error processing template:', error);
+        return content; // Return original content on error
     }
 }
 
@@ -298,16 +354,8 @@ async function executeWorkflowNode(session, nodeId) {
         // Execute node based on type
         switch (node.type) {
             case 'message':
-                // Replace variables in content
-                let content = node.content;
-                if (content && session.data) {
-                    for (const [key, value] of Object.entries(session.data)) {
-                        if (value !== undefined && value !== null) {
-                            const regex = new RegExp(`{{\\s*${key}\\s*}}`, 'g');
-                            content = content.replace(regex, value);
-                        }
-                    }
-                }
+                // Replace variables in content using the enhanced template processor
+                const content = processTemplate(node.content, session.data || {});
                 
                 console.log(`  Sending message: "${content}"`);
                 
@@ -375,16 +423,8 @@ async function executeWorkflowNode(session, nodeId) {
             case 'input':
                 // For input nodes, send prompt if exists, then wait for user input
                 if (node.content) {
-                    // Replace variables in prompt content
-                    let promptContent = node.content;
-                    if (promptContent && session.data) {
-                        for (const [key, value] of Object.entries(session.data)) {
-                            if (value !== undefined && value !== null) {
-                                const regex = new RegExp(`{{\\s*${key}\\s*}}`, 'g');
-                                promptContent = promptContent.replace(regex, value);
-                            }
-                        }
-                    }
+                    // Replace variables in prompt content using template processor
+                    const promptContent = processTemplate(node.content, session.data || {});
                     
                     console.log(`  Sending input prompt: "${promptContent}"`);
                     
@@ -630,6 +670,7 @@ async function executeWorkflowNode(session, nodeId) {
                         
                         try {
                             // Import KYC handlers dynamically to avoid circular dependencies
+                            // Import KYC handlers dynamically to avoid circular dependencies
                             const kycWorkflowHandlers = require('./kycWorkflowHandlers');
                             
                             // Check Aadhaar-PAN link
@@ -858,5 +899,6 @@ async function executeWorkflowNode(session, nodeId) {
 module.exports = {
     executeWorkflowNode,
     processWorkflowInput,
-    evaluateCondition
+    evaluateCondition,
+    processTemplate // Export the template processor for testing
 };
