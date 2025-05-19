@@ -179,104 +179,200 @@ function pushDataLayerEvent(session, eventName, eventData = {}) {
 }
 
 /**
- * Create or update GTM tag for KYC step
- * @param {string} kycStep - KYC step name
- * @param {string} userId - User ID
- * @param {boolean} isCompleted - Whether step is completed
- * @private
+ * Create or update a KYC verification tag in GTM
+ * @param {string} kycStep - The KYC step (aadhaar, pan, bank_account, etc.)
+ * @param {string} userId - The user ID
+ * @param {boolean} isCompleted - Whether the step is completed
  */
 async function updateKycStepTag(kycStep, userId, isCompleted = false) {
+  try {
+    // Configure tag parameters
+    const tagName = `KYC_${kycStep.toUpperCase()}_${userId}`;
+    const tagType = 'customEvent';
+    
+    // Get account, container, and workspace IDs from env or defaults
+    const accountId = DEFAULT_ACCOUNT_ID;
+    const containerId = DEFAULT_CONTAINER_ID;
+    const workspaceId = DEFAULT_WORKSPACE_ID;
+    
+    if (!accountId || !containerId) {
+      console.error('GTM configuration missing. Set GTM_ACCOUNT_ID and GTM_CONTAINER_ID env variables.');
+      return;
+    }
+    
+    // First, check if tag already exists
+    const existingTags = await gtmService.getTags(accountId, containerId, workspaceId);
+    const existingTag = existingTags.find(tag => tag.name === tagName);
+    
+    // Find KYC Event Trigger ID
+    let triggerId = null;
     try {
-        // Get GTM configuration
-        const accountId = DEFAULT_ACCOUNT_ID;
-        const containerId = DEFAULT_CONTAINER_ID;
-        const workspaceId = DEFAULT_WORKSPACE_ID;
-        
-        if (!accountId || !containerId) {
-            return false;
+      const triggers = await gtmService.getTriggers(accountId, containerId, workspaceId);
+      const kycTrigger = triggers.find(trigger => trigger.name === 'KYC_EVENT_TRIGGER');
+      
+      if (kycTrigger && kycTrigger.triggerId) {
+        triggerId = kycTrigger.triggerId;
+      } else {
+        // Create the trigger if it doesn't exist
+        console.log('KYC event trigger not found, creating it...');
+        const newTrigger = await createKycEventTrigger('KYC_EVENT_TRIGGER', 'kyc_verification');
+        if (newTrigger && newTrigger.triggerId) {
+          triggerId = newTrigger.triggerId;
         }
-        
-        // Tag configuration for GA4
-        const tagData = {
-            name: `KYC_${kycStep.toUpperCase()}_TAG`,
-            type: 'gaawe', // GA4 event
-            parameter: [
+      }
+    } catch (triggerError) {
+      console.error('Error getting triggers:', triggerError);
+    }
+    
+    // If we couldn't get a valid trigger ID, use a default one
+    // IMPORTANT: We're using a numeric ID now instead of 'ALL_PAGES'
+    const triggerIds = [];
+    if (triggerId) {
+      triggerIds.push(triggerId);
+    }
+    
+    // Define tag data with Universal Analytics format
+    const tagData = {
+      name: tagName,
+      type: 'ua',  // Universal Analytics tag
+      parameter: [
+        {
+          key: 'trackingId',
+          type: 'template',
+          value: '{{GA_TRACKING_ID}}'  // Assumes you have a variable set up
+        },
+        {
+          key: 'trackType',
+          type: 'template',
+          value: 'TRACK_EVENT'
+        },
+        {
+          key: 'eventCategory',
+          type: 'template',
+          value: 'KYC Verification'
+        },
+        {
+          key: 'eventAction',
+          type: 'template',
+          value: kycStep
+        },
+        {
+          key: 'eventLabel',
+          type: 'template',
+          value: userId
+        },
+        {
+          key: 'eventValue',
+          type: 'template',
+          value: isCompleted ? '1' : '0'
+        }
+      ],
+      // Only include firingTriggerId if we have valid trigger IDs
+      ...(triggerIds.length > 0 && { firingTriggerId: triggerIds })
+    };
+    
+    // Alternative tag configuration for GA4
+    const ga4TagData = {
+      name: tagName,
+      type: 'gaawe',  // Google Analytics 4 event
+      parameter: [
+        {
+          key: 'eventName',
+          type: 'template',
+          value: `kyc_${kycStep}_verification`
+        },
+        {
+          key: 'eventParameters',
+          type: 'list',
+          list: [
+            {
+              type: 'map',
+              map: [
                 {
-                    key: 'eventName',
-                    type: 'template',
-                    value: `kyc_${kycStep}_verification`
+                  key: 'name',
+                  type: 'template',
+                  value: 'user_id'
                 },
                 {
-                    key: 'eventParameters',
-                    type: 'list',
-                    list: [
-                        {
-                            type: 'map',
-                            map: [
-                                {
-                                    key: 'name',
-                                    type: 'template',
-                                    value: 'user_id'
-                                },
-                                {
-                                    key: 'value',
-                                    type: 'template',
-                                    value: userId
-                                }
-                            ]
-                        },
-                        {
-                            type: 'map',
-                            map: [
-                                {
-                                    key: 'name',
-                                    type: 'template',
-                                    value: 'completed'
-                                },
-                                {
-                                    key: 'value',
-                                    type: 'template',
-                                    value: isCompleted ? 'true' : 'false'
-                                }
-                            ]
-                        }
-                    ]
+                  key: 'value',
+                  type: 'template',
+                  value: userId
                 }
-            ],
-            firingTriggerId: ['ALL_PAGES']
-        };
-        
-        // Find existing tag or create new one
-        const tags = await gtmService.getTags(accountId, containerId, workspaceId);
-        const existingTag = tags.find(tag => tag.name === tagData.name);
-        
-        if (existingTag) {
-            // Update existing tag
-            await gtmService.updateTag(
-                accountId, 
-                containerId, 
-                workspaceId, 
-                existingTag.tagId, 
+              ]
+            },
+            {
+              type: 'map',
+              map: [
                 {
-                    ...existingTag,
-                    ...tagData
+                  key: 'name',
+                  type: 'template',
+                  value: 'completed'
+                },
+                {
+                  key: 'value',
+                  type: 'template',
+                  value: isCompleted ? 'true' : 'false'
                 }
-            );
-        } else {
-            // Create new tag
-            await gtmService.createTag(
-                accountId,
-                containerId,
-                workspaceId,
-                tagData
-            );
+              ]
+            }
+          ]
         }
-        
-        return true;
-    } catch (error) {
-        console.error('Error updating KYC GTM tag:', error);
-        return false;
+      ],
+      // Only include firingTriggerId if we have valid trigger IDs
+      ...(triggerIds.length > 0 && { firingTriggerId: triggerIds })
+    };
+    
+    if (existingTag) {
+      // Update existing tag
+      console.log(`Updating GTM tag for KYC step ${kycStep} for user ${userId}`);
+      
+      // Choose between UA or GA4 format based on existing tag
+      const tagConfig = existingTag.type === 'gaawe' ? ga4TagData : tagData;
+      
+      // Remove firingTriggerId if not valid
+      const updateData = {
+        ...existingTag,
+        ...tagConfig,
+        // Make sure to preserve the fingerprint for updates
+        fingerprint: existingTag.fingerprint
+      };
+      
+      // Don't include firingTriggerId if it's empty
+      if (!triggerIds.length && updateData.firingTriggerId) {
+        delete updateData.firingTriggerId;
+      }
+      
+      const updatedTag = await gtmService.updateTag(
+        accountId, 
+        containerId, 
+        workspaceId, 
+        existingTag.tagId, 
+        updateData
+      );
+      return updatedTag;
+    } else {
+      // Create new tag (using GA4 by default for new tags)
+      console.log(`Creating GTM tag for KYC step ${kycStep} for user ${userId}`);
+      
+      // For new tags, if we don't have valid trigger IDs, remove the property
+      const newTagData = {...ga4TagData};
+      if (!triggerIds.length && newTagData.firingTriggerId) {
+        delete newTagData.firingTriggerId;
+      }
+      
+      const newTag = await gtmService.createTag(
+        accountId,
+        containerId,
+        workspaceId,
+        newTagData  // Using GA4 for new tags
+      );
+      return newTag;
     }
+  } catch (error) {
+    console.error('Error updating KYC GTM tag:', error);
+    console.error('Error details:', error.stack);
+    // Non-blocking - don't throw errors from tracking
+  }
 }
 
 /**
