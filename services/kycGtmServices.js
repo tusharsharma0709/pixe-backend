@@ -26,8 +26,7 @@ const TrackingEventSchema = new mongoose.Schema({
 });
 
 // Create model if it doesn't exist
-const TrackingEvent = mongoose.models.TrackingEvents || 
-                       mongoose.model('TrackingEvents', TrackingEventSchema);
+const TrackingEvent = require('../models/trackingEvents')
 
 /**
  * Track KYC verification step in GTM
