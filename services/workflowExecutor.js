@@ -210,8 +210,9 @@ function generateSessionToken(session) {
  * @param {Object} session - The user session
  * @param {String} input - The user input message
  * @param {String} messageId - Optional WhatsApp message ID for deduplication
+ * @param {String} messageType - Type of message (text, interactive, etc.)
  */
-async function processWorkflowInput(session, input, messageId = null) {
+async function processWorkflowInput(session, input, messageId = null, messageType = 'text') {
     try {
         // Check for duplicate message processing if messageId is provided
         if (messageId) {
@@ -235,6 +236,7 @@ async function processWorkflowInput(session, input, messageId = null) {
         
         console.log(`⚙️ Processing workflow input for session ${session._id}`);
         console.log(`  Input: "${input}"`);
+        console.log(`  Message type: ${messageType}`);
         console.log(`  Current node: ${session.currentNodeId}`);
         
         // Get workflow
@@ -254,17 +256,18 @@ async function processWorkflowInput(session, input, messageId = null) {
         console.log(`  Node type: ${currentNode.type}`);
         console.log(`  Node name: ${currentNode.name}`);
         
-        if (currentNode.type === 'input') {
+        // Initialize data object if needed
+        if (!session.data) {
+            session.data = {};
+        }
+        
+        // Handle different types of inputs based on node type
+        if (currentNode.type === 'input' || currentNode.type === 'interactive') {
             // Store user input in session data
             const variableName = currentNode.variableName;
             if (!variableName) {
-                console.error('❌ No variable name defined for input node');
+                console.error('❌ No variable name defined for node');
                 return;
-            }
-            
-            // Initialize data object if needed
-            if (!session.data) {
-                session.data = {};
             }
             
             // Save the user's input to the session data
@@ -288,12 +291,12 @@ async function processWorkflowInput(session, input, messageId = null) {
                 // Then execute the next node
                 await executeWorkflowNode(session, currentNode.nextNodeId);
             } else {
-                console.error(`❌ No next node defined for input node ${currentNode.nodeId}`);
+                console.error(`❌ No next node defined for node ${currentNode.nodeId}`);
                 // Just save the session
                 await session.save();
             }
         } else {
-            console.log(`⚠️ Current node is not an input node. Type: ${currentNode.type}`);
+            console.log(`⚠️ Current node is not an input or interactive node. Type: ${currentNode.type}`);
             // Just save the session
             await session.save();
         }
@@ -418,6 +421,90 @@ async function executeWorkflowNode(session, nodeId) {
                     }
                 } catch (error) {
                     console.error(`❌ Error sending message:`, error);
+                    return false;
+                }
+                break;
+                
+            case 'interactive':
+                console.log(`  Executing interactive node: ${node.name}`);
+                
+                try {
+                    // Process template variables in content
+                    const interactiveContent = processTemplate(node.content, session.data || {});
+                    
+                    // Create buttons array from the options
+                    const buttons = [];
+                    
+                    // Check if buttons are explicitly defined
+                    if (node.buttons && Array.isArray(node.buttons)) {
+                        // Use explicitly defined buttons
+                        buttons.push(...node.buttons.map(btn => ({
+                            text: processTemplate(btn.text, session.data || {}),
+                            value: btn.value
+                        })));
+                    } 
+                    // If no explicit buttons, use options if available
+                    else if (node.options && Array.isArray(node.options)) {
+                        // Create buttons from options
+                        buttons.push(...node.options.map(opt => ({
+                            text: opt.text || opt.label,
+                            value: opt.value
+                        })));
+                    }
+                    
+                    console.log(`  Sending interactive message with ${buttons.length} buttons`);
+                    
+                    if (buttons.length === 0) {
+                        console.error(`❌ No buttons defined for interactive node ${node.nodeId}`);
+                        return false;
+                    }
+                    
+                    // Send WhatsApp message with buttons
+                    const messageResult = await whatsappService.sendButtonMessage(
+                        session.phone, 
+                        interactiveContent, 
+                        buttons
+                    );
+                    
+                    // Get message ID from response
+                    const whatsappMessageId = messageResult.messages?.[0]?.id;
+                    
+                    // Create message record
+                    await Message.create({
+                        sessionId: session._id,
+                        userId: session.userId,
+                        adminId: session.adminId,
+                        campaignId: session.campaignId,
+                        sender: 'workflow',
+                        messageType: 'interactive',
+                        content: interactiveContent,
+                        status: 'sent',
+                        nodeId: node.nodeId,
+                        whatsappMessageId,
+                        metadata: { buttons }
+                    });
+                    
+                    console.log('✅ Saved interactive message to database');
+                    
+                    // Wait to avoid rate limits
+                    await new Promise(resolve => setTimeout(resolve, 1500));
+                    
+                    // Store the variable name for this input
+                    if (node.variableName) {
+                        session.pendingVariableName = node.variableName;
+                        session.markModified('data');
+                        await session.save();
+                    }
+                    
+                    // Since interactive messages are waiting for user input,
+                    // don't proceed to next node automatically
+                    if (node.nextNodeId) {
+                        session.nextNodeIdAfterInput = node.nextNodeId;
+                        session.markModified('data');
+                        await session.save();
+                    }
+                } catch (error) {
+                    console.error(`❌ Error sending interactive message:`, error);
                     return false;
                 }
                 break;
@@ -761,7 +848,6 @@ async function executeWorkflowNode(session, nodeId) {
                         
                         try {
                             // Import KYC handlers dynamically to avoid circular dependencies
-                            // Import KYC handlers dynamically to avoid circular dependencies
                             const kycWorkflowHandlers = require('./kycWorkflowHandlers');
                             
                             // Check Aadhaar-PAN link
@@ -958,7 +1044,7 @@ async function executeWorkflowNode(session, nodeId) {
                         // Get API base URL from env or use default
                         const apiBaseUrl = process.env.API_BASE_URL || '';
                         
-                        // Generate auth token for API call
+// Generate auth token for API call
                         const token = generateSessionToken(session);
                         
                         // Make the API call

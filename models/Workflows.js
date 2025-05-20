@@ -19,6 +19,7 @@ const workflowNodeSchema = new mongoose.Schema({
             'api',
             'surepass',
             'bank_verification',
+            'interactive', // Add this line
             'credit_check',
             'loan_offer',
             'payment_link',

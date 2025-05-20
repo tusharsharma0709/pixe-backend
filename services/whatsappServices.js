@@ -148,61 +148,66 @@ const sendMediaMessage = async (phoneNumber, mediaUrl, caption = '', mediaType =
 };
 
 /**
- * Send an interactive message with buttons
- * @param {String} phoneNumber - Recipient's phone number 
- * @param {String} headerText - Header text
- * @param {String} bodyText - Body text
- * @param {Array} buttons - Array of button objects
- * @returns {Promise} - API response
+ * Send a WhatsApp message with interactive buttons
+ * @param {String} phoneNumber - The recipient's phone number
+ * @param {String} bodyText - The message text
+ * @param {Array} buttons - Array of button objects with text and value
+ * @returns {Promise<Object>} - WhatsApp API response
  */
-const sendButtonMessage = async (phoneNumber, headerText, bodyText, buttons) => {
-    try {
-        // Format phone number
-        const phoneStr = String(phoneNumber);
-        const formattedPhone = phoneStr.startsWith('+') ? 
-            phoneStr.substring(1) : phoneStr.replace(/[^\d]/g, '');
-        
-        console.log(`\n📤 SENDING WHATSAPP BUTTON MESSAGE`);
-        console.log(`  To: ${formattedPhone}`);
-        
-        // Build request URL and payload
-        const url = `https://graph.facebook.com/v22.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
-        
-        const payload = {
-            messaging_product: "whatsapp",
-            to: formattedPhone,
-            type: "interactive",
-            interactive: {
-                type: "button",
-                header: {
-                    type: "text",
-                    text: headerText
-                },
-                body: {
-                    text: bodyText
-                },
-                action: {
-                    buttons: buttons
-                }
-            }
-        };
-        
-        // Send request
-        const response = await axios.post(url, payload, {
-            headers: {
-                'Authorization': `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        console.log(`✅ Button message sent successfully`);
-        
-        return response.data;
-    } catch (error) {
-        console.error(`❌ WHATSAPP BUTTON MESSAGE ERROR:`, error.message);
-        throw error;
-    }
-};
+async function sendButtonMessage(phoneNumber, bodyText, buttons) {
+  try {
+      console.log(`Sending WhatsApp interactive message to: ${phoneNumber}`);
+      
+      // Format phone number (remove '+' if present)
+      const formattedPhone = phoneNumber.replace(/^\+/, '');
+      
+      // Limit buttons to 3 (WhatsApp limitation)
+      const processedButtons = buttons.slice(0, 3).map(button => ({
+          type: "reply",
+          reply: {
+              id: button.value || button.id,
+              title: (button.text || button.title).substring(0, 20) // Max 20 chars
+          }
+      }));
+      
+      // Create message payload
+      const payload = {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: formattedPhone,
+          type: "interactive",
+          interactive: {
+              type: "button",
+              body: {
+                  text: bodyText
+              },
+              action: {
+                  buttons: processedButtons
+              }
+          }
+      };
+      
+      // API URL from environment or use default
+      const apiUrl = `${process.env.WHATSAPP_API_URL || 'https://graph.facebook.com/v22.0'}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+      
+      // Make API request
+      const response = await axios.post(
+          apiUrl,
+          payload,
+          {
+              headers: {
+                  'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+                  'Content-Type': 'application/json'
+              }
+          }
+      );
+      
+      return response.data;
+  } catch (error) {
+      console.error('Error sending interactive message:', error.response?.data || error.message);
+      throw error;
+  }
+}
 
 // We'll export the main functions we need for our KYC workflow
 module.exports = {

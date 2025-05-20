@@ -346,7 +346,6 @@ const MessageController = {
     // In MessageController.js
     receiveMessage: async (req, res) => {
         try {
-            
             // WhatsApp sends data in this specific format
             const { entry } = req.body;
             
@@ -366,7 +365,7 @@ const MessageController = {
                 const whatsappMessageId = message.id;
                 
                 // Process message based on type
-                let content, messageType, mediaUrl, mediaName, mediaSize;
+                let content, messageType, mediaUrl, mediaName, mediaSize, metadata;
                 
                 // Determine message type
                 messageType = message.type || 'text';
@@ -374,6 +373,33 @@ const MessageController = {
                 switch (messageType) {
                     case 'text':
                         content = message.text?.body || '';
+                        break;
+                    case 'interactive':
+                        // Handle interactive message responses (buttons, lists)
+                        if (message.interactive.type === 'button_reply') {
+                            const buttonReply = message.interactive.button_reply;
+                            content = buttonReply.id; // Use button ID as content
+                            metadata = {
+                                buttonTitle: buttonReply.title,
+                                buttonId: buttonReply.id,
+                                interactiveType: 'button'
+                            };
+                            console.log(`Received button response: ID=${buttonReply.id}, Title=${buttonReply.title}`);
+                        } 
+                        else if (message.interactive.type === 'list_reply') {
+                            const listReply = message.interactive.list_reply;
+                            content = listReply.id; // Use list item ID as content
+                            metadata = {
+                                listItemTitle: listReply.title,
+                                listItemId: listReply.id,
+                                interactiveType: 'list'
+                            };
+                            console.log(`Received list response: ID=${listReply.id}, Title=${listReply.title}`);
+                        } 
+                        else {
+                            content = `Received interactive message of type: ${message.interactive.type}`;
+                            metadata = { interactiveType: message.interactive.type };
+                        }
                         break;
                     case 'image':
                         content = message.image?.caption || 'Image received';
@@ -464,16 +490,18 @@ const MessageController = {
                     whatsappMessageId: whatsappMessageId,
                     status: 'delivered',
                     mediaUrl: mediaUrl,
-                    mediaType: messageType !== 'text' ? messageType : null,
+                    mediaType: messageType !== 'text' && messageType !== 'interactive' ? messageType : null,
                     mediaName: mediaName,
-                    mediaSize: mediaSize
+                    mediaSize: mediaSize,
+                    metadata: metadata || null  // Store metadata for interactive messages
                 });
                 
                 // Process workflow if applicable
                 if (session.workflowId && session.currentNodeId) {
                     try {
                         const { processWorkflowInput } = require('../services/workflowExecutor');
-                        await processWorkflowInput(session, content);
+                        // Pass message type as fourth parameter
+                        await processWorkflowInput(session, content, whatsappMessageId, messageType);
                         console.log('Processed workflow input');
                     } catch (workflowError) {
                         console.error('Error processing workflow:', workflowError);
@@ -501,6 +529,7 @@ const MessageController = {
             return res.sendStatus(200);
             
         } catch (error) {
+            console.error('Error processing message:', error);
             // Always return 200 to WhatsApp to prevent retries
             return res.sendStatus(200);
         }
