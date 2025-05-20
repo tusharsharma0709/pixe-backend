@@ -1,10 +1,7 @@
 // models/Workflows.js
 const mongoose = require('mongoose');
 
-// Suggested update for models/Workflows.js
-// Focus on the workflowNodeSchema section
-
-const workflowSchema = new mongoose.Schema({
+const workflowNodeSchema = new mongoose.Schema({
     nodeId: {
         type: String,
         required: true
@@ -22,7 +19,7 @@ const workflowSchema = new mongoose.Schema({
             'api',
             'surepass',
             'bank_verification',
-            'interactive', // Interactive node type
+            'interactive',
             'credit_check',
             'loan_offer',
             'payment_link',
@@ -39,15 +36,11 @@ const workflowSchema = new mongoose.Schema({
     content: {
         type: String
     },
-    // Define options as an explicit array of objects with proper schema
+    // Updated options schema to support both text/value and text/nextNodeId patterns
     options: [{
-        text: { type: String },
-        value: { type: String }
-    }],
-    // Also support buttons format for backward compatibility
-    buttons: [{
-        text: { type: String },
-        value: { type: String }
+        text: String,
+        value: String,  // Added this field
+        nextNodeId: String  // Kept existing field
     }],
     // For API nodes
     apiEndpoint: {
@@ -115,9 +108,57 @@ const workflowSchema = new mongoose.Schema({
     // Error handling
     errorNodeId: {
         type: String // Node to go to if there's an error
+    },
+    // Keep support for buttons array
+    buttons: [{
+        text: String,
+        value: String
+    }],
+}, { 
+    _id: false,
+    strict: false  // Allow extra fields not defined in the schema
+});
+
+const workflowSchema = new mongoose.Schema({
+    name: {
+        type: String,
+        required: true,
+        trim: true
+    },
+    description: {
+        type: String,
+        trim: true
+    },
+    adminId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Admins',
+        required: true
+    },
+    isActive: {
+        type: Boolean,
+        default: true
+    },
+    isTemplate: {
+        type: Boolean,
+        default: false
+    },
+    nodes: [workflowNodeSchema],
+    startNodeId: {
+        type: String,
+        required: true
+    },
+    version: {
+        type: Number,
+        default: 1
+    },
+    tags: [{
+        type: String
+    }],
+    category: {
+        type: String,
+        default: 'general'
     }
-}, { _id: false }
-, { 
+}, { 
     timestamps: true 
 });
 

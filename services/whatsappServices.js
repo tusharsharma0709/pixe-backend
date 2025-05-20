@@ -147,7 +147,7 @@ const sendMediaMessage = async (phoneNumber, mediaUrl, caption = '', mediaType =
     }
 };
 
-// WhatsappService Fixes - Update your whatsappServices.js
+// Updated sendButtonMessage function for services/whatsappServices.js
 
 /**
  * Send a WhatsApp message with interactive buttons
@@ -158,22 +158,25 @@ const sendMediaMessage = async (phoneNumber, mediaUrl, caption = '', mediaType =
  */
 async function sendButtonMessage(phoneNumber, bodyText, buttons) {
   try {
-      console.log(`Sending WhatsApp interactive message to: ${phoneNumber}`);
-      console.log(`Buttons payload:`, JSON.stringify(buttons));
+      console.log(`\n📤 SENDING WHATSAPP INTERACTIVE MESSAGE`);
+      console.log(`  To: ${phoneNumber}`);
+      console.log(`  Message: "${bodyText}"`);
       
-      // Format phone number (remove '+' if present)
-      const formattedPhone = phoneNumber.replace(/^\+/, '');
+      // Format phone number (remove +, spaces, etc.)
+      const phoneStr = String(phoneNumber);
+      const formattedPhone = phoneStr.startsWith('+') ? 
+          phoneStr.substring(1) : phoneStr.replace(/[^\d]/g, '');
       
       // Limit buttons to 3 (WhatsApp limitation)
       const processedButtons = buttons.slice(0, 3).map(button => ({
           type: "reply",
           reply: {
-              id: String(button.value || button.id).substring(0, 256),
-              title: String(button.text || button.title).substring(0, 20) // Max 20 chars
+              id: String(button.value || button.id || "option").substring(0, 256),  // Max 256 chars for ID
+              title: String(button.text || button.title || "Option").substring(0, 20) // Max 20 chars for title
           }
       }));
       
-      console.log(`Processed buttons:`, JSON.stringify(processedButtons));
+      console.log(`  Processed ${processedButtons.length} buttons for WhatsApp API`);
       
       // Create message payload
       const payload = {
@@ -192,10 +195,22 @@ async function sendButtonMessage(phoneNumber, bodyText, buttons) {
           }
       };
       
-      console.log(`Full WhatsApp API payload:`, JSON.stringify(payload));
+      // Get API URL and token
+      const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+      const accessToken = process.env.WHATSAPP_API_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
       
-      // API URL from environment or use default
-      const apiUrl = `${process.env.WHATSAPP_API_URL || 'https://graph.facebook.com/v22.0'}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+      if (!phoneNumberId) {
+          throw new Error('WHATSAPP_PHONE_NUMBER_ID not configured in environment');
+      }
+      
+      if (!accessToken) {
+          throw new Error('WhatsApp access token not configured in environment');
+      }
+      
+      // API URL
+      const apiUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+      
+      console.log(`  Using API URL: ${apiUrl}`);
       
       // Make API request
       const response = await axios.post(
@@ -203,22 +218,34 @@ async function sendButtonMessage(phoneNumber, bodyText, buttons) {
           payload,
           {
               headers: {
-                  'Authorization': `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
+                  'Authorization': `Bearer ${accessToken}`,
                   'Content-Type': 'application/json'
               }
           }
       );
       
-      console.log(`WhatsApp button API response:`, JSON.stringify(response.data));
+      console.log(`✅ Message sent successfully`);
+      console.log(`  Status: ${response.status}`);
+      console.log(`  Response:`, response.data);
+      
       return response.data;
   } catch (error) {
-      console.error('Error sending interactive message:');
+      console.error(`❌ WHATSAPP INTERACTIVE MESSAGE ERROR`);
+      
       if (error.response) {
-          console.error(`Status code: ${error.response.status}`);
-          console.error(`Error response:`, error.response.data);
+          // The request was made and the server responded with a status code
+          // that falls out of the range of 2xx
+          console.error(`  Status: ${error.response.status}`);
+          console.error(`  Response:`, error.response.data);
+      } else if (error.request) {
+          // The request was made but no response was received
+          console.error(`  No response received`);
       } else {
-          console.error(error.message);
+          // Something happened in setting up the request that triggered an Error
+          console.error(`  Error: ${error.message}`);
       }
+      
+      // Throw enhanced error
       throw error;
   }
 }

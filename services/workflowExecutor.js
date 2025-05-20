@@ -425,12 +425,7 @@ async function executeWorkflowNode(session, nodeId) {
                 }
                 break;
                 
-// Suggested update for services/workflowExecutor.js
-// Focus on the part that handles interactive nodes
-
-// In the executeWorkflowNode function, find the case for 'interactive'
-// Here's an improved version of that code section:
-
+// In your executeWorkflowNode function, replace the case for 'interactive' with this improved version
 case 'interactive':
     console.log(`  Executing interactive node: ${node.name}`);
     
@@ -438,51 +433,44 @@ case 'interactive':
         // Process template variables in content
         const interactiveContent = processTemplate(node.content, session.data || {});
         
-        // Log the node structure for debugging
-        console.log(`  Interactive node structure:`, JSON.stringify({
-            nodeId: node.nodeId,
-            type: node.type,
-            buttons: node.buttons ? node.buttons.length : 0,
-            options: node.options ? node.options.length : 0,
-            variableName: node.variableName || 'Not defined'
-        }));
-        
-        // Create buttons array from options or buttons
+        // Create buttons array from either options or buttons properties
         const buttons = [];
         
-        // First check if node has options
+        // First check if node has options array
         if (node.options && Array.isArray(node.options) && node.options.length > 0) {
-            console.log(`  Found ${node.options.length} options in the node`);
+            console.log(`  Found ${node.options.length} options in node`);
             
-            // Create buttons from options
-            node.options.forEach(opt => {
-                console.log(`  Processing option: ${JSON.stringify(opt)}`);
-                buttons.push({
-                    text: processTemplate(opt.text || opt.label || "Option", session.data || {}),
-                    value: opt.value || opt.id || "option"
-                });
-            });
-        } 
-        // Then check buttons as fallback
+            // Loop through options and create buttons
+            for (const option of node.options) {
+                if (option && (option.text || option.label)) {
+                    buttons.push({
+                        text: option.text || option.label,
+                        value: option.value || option.id || option.text
+                    });
+                }
+            }
+        }
+        // Otherwise check if it has buttons array
         else if (node.buttons && Array.isArray(node.buttons) && node.buttons.length > 0) {
-            console.log(`  Found ${node.buttons.length} buttons in the node`);
+            console.log(`  Found ${node.buttons.length} buttons in node`);
             
-            // Use explicitly defined buttons
-            node.buttons.forEach(btn => {
-                console.log(`  Processing button: ${JSON.stringify(btn)}`);
-                buttons.push({
-                    text: processTemplate(btn.text || btn.title || "Option", session.data || {}),
-                    value: btn.value || btn.id || "option"
-                });
-            });
+            // Loop through buttons
+            for (const button of node.buttons) {
+                if (button && (button.text || button.title)) {
+                    buttons.push({
+                        text: button.text || button.title,
+                        value: button.value || button.id || button.text
+                    });
+                }
+            }
         }
         
-        console.log(`  Final buttons array: ${JSON.stringify(buttons)}`);
+        console.log(`  Final buttons prepared: ${buttons.length}`);
         
         if (buttons.length === 0) {
-            console.error(`❌ No buttons defined for interactive node ${node.nodeId}`);
+            console.error(`❌ No buttons available for interactive node ${node.nodeId}`);
             
-            // Fallback to a regular message if no buttons are defined
+            // Fallback to regular message if no buttons
             console.log(`⚠️ Falling back to regular message for node ${node.nodeId}`);
             
             // Send regular message instead
@@ -491,20 +479,88 @@ case 'interactive':
                 interactiveContent + "\n\nPlease reply with your choice."
             );
             
-            // Rest of the fallback handling...
-        } else {
-            // Send WhatsApp message with buttons
-            console.log(`  Sending interactive message with ${buttons.length} buttons to ${session.phone}`);
-            const messageResult = await whatsappService.sendButtonMessage(
-                session.phone, 
-                interactiveContent, 
-                buttons
-            );
+            // Get WhatsApp message ID
+            const whatsappMessageId = fallbackResult.messages?.[0]?.id;
             
-            // Rest of the interactive message handling...
+            // Create message record
+            await Message.create({
+                sessionId: session._id,
+                userId: session.userId,
+                adminId: session.adminId,
+                campaignId: session.campaignId,
+                sender: 'workflow',
+                messageType: 'text',
+                content: interactiveContent + "\n\nPlease reply with your choice.",
+                status: 'sent',
+                nodeId: node.nodeId,
+                whatsappMessageId,
+                metadata: { 
+                    fallback: true,
+                    originalType: 'interactive'
+                }
+            });
+            
+            console.log('✅ Saved fallback message to database');
+            
+            // Store the variable name for this input
+            if (node.variableName) {
+                session.pendingVariableName = node.variableName;
+                session.markModified('data');
+                await session.save();
+            }
+            
+            return true;
         }
         
-        // Rest of the function...
+        // Send WhatsApp message with buttons
+        console.log(`  Sending interactive message with ${buttons.length} buttons`);
+        const messageResult = await whatsappService.sendButtonMessage(
+            session.phone, 
+            interactiveContent, 
+            buttons
+        );
+        
+        console.log(`✅ WhatsApp API response:`, messageResult);
+        
+        // Get WhatsApp message ID
+        const whatsappMessageId = messageResult.messages?.[0]?.id;
+        
+        // Create message record
+        await Message.create({
+            sessionId: session._id,
+            userId: session.userId,
+            adminId: session.adminId,
+            campaignId: session.campaignId,
+            sender: 'workflow',
+            messageType: 'interactive',
+            content: interactiveContent,
+            status: 'sent',
+            nodeId: node.nodeId,
+            whatsappMessageId,
+            metadata: { buttons }
+        });
+        
+        console.log('✅ Saved interactive message to database');
+        
+        // Wait to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        // Store the variable name for this input if available
+        if (node.variableName) {
+            session.pendingVariableName = node.variableName;
+            session.markModified('data');
+            await session.save();
+        }
+        
+        // Store next node ID if available
+        if (node.nextNodeId) {
+            session.nextNodeIdAfterInput = node.nextNodeId;
+            session.markModified('data');
+            await session.save();
+        }
+        
+        // Interactive nodes wait for user input, so don't continue execution
+        return true;
     } catch (error) {
         console.error(`❌ Error sending interactive message:`, error);
         return false;
