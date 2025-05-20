@@ -106,7 +106,12 @@ const workflowNodeSchema = new mongoose.Schema({
     // Error handling
     errorNodeId: {
         type: String // Node to go to if there's an error
-    }
+    },
+    // Add proper support for interactive node buttons
+    buttons: [{
+        text: String,
+        value: String
+    }],
 }, { _id: false });
 
 const workflowSchema = new mongoose.Schema({

@@ -442,15 +442,13 @@ async function executeWorkflowNode(session, nodeId) {
                     // Create buttons array from the options
                     const buttons = [];
                     
-                    // Check if buttons are explicitly defined
                     if (node.buttons && Array.isArray(node.buttons) && node.buttons.length > 0) {
                         // Use explicitly defined buttons
                         buttons.push(...node.buttons.map(btn => ({
                             text: processTemplate(btn.text || btn.title || "Option", session.data || {}),
                             value: btn.value || btn.id || "option"
                         })));
-                        console.log(`  Found ${buttons.length} explicitly defined buttons`);
-                    } 
+                    }
                     // If no explicit buttons, check if using options array
                     else if (node.options && Array.isArray(node.options) && node.options.length > 0) {
                         // Create buttons from options
