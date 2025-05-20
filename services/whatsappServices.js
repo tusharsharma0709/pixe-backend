@@ -147,6 +147,8 @@ const sendMediaMessage = async (phoneNumber, mediaUrl, caption = '', mediaType =
     }
 };
 
+// WhatsappService Fixes - Update your whatsappServices.js
+
 /**
  * Send a WhatsApp message with interactive buttons
  * @param {String} phoneNumber - The recipient's phone number
@@ -157,6 +159,7 @@ const sendMediaMessage = async (phoneNumber, mediaUrl, caption = '', mediaType =
 async function sendButtonMessage(phoneNumber, bodyText, buttons) {
   try {
       console.log(`Sending WhatsApp interactive message to: ${phoneNumber}`);
+      console.log(`Buttons payload:`, JSON.stringify(buttons));
       
       // Format phone number (remove '+' if present)
       const formattedPhone = phoneNumber.replace(/^\+/, '');
@@ -165,10 +168,12 @@ async function sendButtonMessage(phoneNumber, bodyText, buttons) {
       const processedButtons = buttons.slice(0, 3).map(button => ({
           type: "reply",
           reply: {
-              id: button.value || button.id,
-              title: (button.text || button.title).substring(0, 20) // Max 20 chars
+              id: String(button.value || button.id).substring(0, 256),
+              title: String(button.text || button.title).substring(0, 20) // Max 20 chars
           }
       }));
+      
+      console.log(`Processed buttons:`, JSON.stringify(processedButtons));
       
       // Create message payload
       const payload = {
@@ -187,6 +192,8 @@ async function sendButtonMessage(phoneNumber, bodyText, buttons) {
           }
       };
       
+      console.log(`Full WhatsApp API payload:`, JSON.stringify(payload));
+      
       // API URL from environment or use default
       const apiUrl = `${process.env.WHATSAPP_API_URL || 'https://graph.facebook.com/v22.0'}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
       
@@ -196,15 +203,22 @@ async function sendButtonMessage(phoneNumber, bodyText, buttons) {
           payload,
           {
               headers: {
-                  'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+                  'Authorization': `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
                   'Content-Type': 'application/json'
               }
           }
       );
       
+      console.log(`WhatsApp button API response:`, JSON.stringify(response.data));
       return response.data;
   } catch (error) {
-      console.error('Error sending interactive message:', error.response?.data || error.message);
+      console.error('Error sending interactive message:');
+      if (error.response) {
+          console.error(`Status code: ${error.response.status}`);
+          console.error(`Error response:`, error.response.data);
+      } else {
+          console.error(error.message);
+      }
       throw error;
   }
 }
