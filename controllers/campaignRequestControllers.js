@@ -23,14 +23,12 @@ const fs = require('fs');
  * @access Private (Admin)
  */
 const createCampaignRequest = async (req, res) => {
-    console.log('Creating new campaign request...');
     
     try {
         const adminId = req.adminId;
         
         // Debug info for uploaded files
         if (req.files && req.files.length > 0) {
-            console.log(`Received ${req.files.length} files with request`);
             req.files.forEach((file, index) => {
                 console.log(`File ${index + 1}:`, {
                     originalname: file.originalname,
@@ -46,7 +44,6 @@ const createCampaignRequest = async (req, res) => {
         // Validate the admin exists and is active
         const admin = await Admin.findById(adminId);
         if (!admin) {
-            console.log(`Admin not found with ID: ${adminId}`);
             return res.status(404).json({
                 success: false,
                 message: "Admin not found"
@@ -63,15 +60,11 @@ const createCampaignRequest = async (req, res) => {
         
         // Check if admin has verified Facebook credentials
         if (!admin.fb_credentials_verified) {
-            console.log(`Admin has unverified Facebook credentials: ${adminId}`);
             return res.status(400).json({
                 success: false,
                 message: "You need to verify your Facebook credentials before creating campaigns"
             });
         }
-        
-        // Extract data from request
-        console.log('Extracting request data...');
         let { 
             name, 
             description, 
@@ -105,19 +98,15 @@ const createCampaignRequest = async (req, res) => {
         // Parse JSON strings if coming from form-data
         try {
             if (typeof targeting === 'string') {
-                console.log('Parsing targeting JSON...');
                 targeting = JSON.parse(targeting);
             }
             if (typeof budgetSchedule === 'string') {
-                console.log('Parsing budgetSchedule JSON...');
                 budgetSchedule = JSON.parse(budgetSchedule);
             }
             if (typeof creatives === 'string') {
-                console.log('Parsing creatives JSON...');
                 creatives = JSON.parse(creatives);
             }
         } catch (parseError) {
-            console.error("JSON parsing error:", parseError);
             return res.status(400).json({
                 success: false,
                 message: "Invalid JSON format in request data",
@@ -127,7 +116,6 @@ const createCampaignRequest = async (req, res) => {
         
         // Validate required fields
         if (!name || !objective || !adType || !budgetSchedule || !creatives) {
-            console.log('Missing required fields');
             return res.status(400).json({
                 success: false,
                 message: "Missing required fields"
@@ -136,7 +124,6 @@ const createCampaignRequest = async (req, res) => {
         
         // Validate that creatives is an array
         if (!Array.isArray(creatives)) {
-            console.log('Creatives is not an array');
             return res.status(400).json({
                 success: false,
                 message: "Creatives must be an array"
@@ -227,7 +214,6 @@ const createCampaignRequest = async (req, res) => {
         
         // Validate workflow if provided
         if (workflowId) {
-            console.log(`Validating workflow: ${workflowId}`);
             const workflow = await Workflow.findById(workflowId);
             if (!workflow) {
                 return res.status(404).json({
@@ -249,14 +235,11 @@ const createCampaignRequest = async (req, res) => {
         let creativeFiles = [];
         if (req.files && Array.isArray(req.files) && req.files.length > 0) {
             try {
-                console.log('Processing uploaded files...');
                 // Get Firebase Storage bucket
                 const bucket = getBucket();
-                console.log(`Using Firebase bucket: ${bucket.name}`);
                 
                 for (const file of req.files) {
                     try {
-                        console.log(`Processing file: ${file.originalname}`);
                         
                         // Generate unique filename
                         const fileExt = path.extname(file.originalname);
@@ -268,13 +251,9 @@ const createCampaignRequest = async (req, res) => {
                         const month = currentDate.getMonth() + 1;
                         
                         const filePath = `uploads/campaigns/${year}/${month}/${filename}`;
-                        console.log(`File path in storage: ${filePath}`);
                         
                         // Create a file reference in Firebase Storage
                         const fileRef = bucket.file(filePath);
-                        
-                        // Upload file to Firebase Storage
-                        console.log('Uploading file to Firebase...');
                         await fileRef.save(file.buffer, {
                             metadata: {
                                 contentType: file.mimetype,
@@ -286,7 +265,6 @@ const createCampaignRequest = async (req, res) => {
                         
                         // Get public URL
                         const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
-                        console.log(`File uploaded successfully. URL: ${fileUrl}`);
                         
                         // Create file upload record
                         const fileUpload = await FileUpload.create({
@@ -310,15 +288,11 @@ const createCampaignRequest = async (req, res) => {
                                 firebasePath: filePath
                             }
                         });
-                        
-                        console.log(`File record created with ID: ${fileUpload._id}`);
                         creativeFiles.push(fileUpload);
                     } catch (fileError) {
-                        console.error("Error uploading file to Firebase:", fileError);
                         
                         // Try uploading to local storage as a fallback
                         try {
-                            console.log('Attempting local file storage as fallback...');
                             const fileUpload = await saveFileLocally(file, adminId, 'admin', 'campaign_request');
                             creativeFiles.push(fileUpload);
                             console.log(`File saved locally. URL: ${fileUpload.url}`);
@@ -328,15 +302,12 @@ const createCampaignRequest = async (req, res) => {
                     }
                 }
             } catch (storageError) {
-                console.error("Error with Firebase storage:", storageError);
                 
                 // Fallback to local storage if Firebase fails
                 try {
-                    console.log('Firebase storage failed. Falling back to local storage...');
                     for (const file of req.files) {
                         const fileUpload = await saveFileLocally(file, adminId, 'admin', 'campaign_request');
                         creativeFiles.push(fileUpload);
-                        console.log(`File saved locally. URL: ${fileUpload.url}`);
                     }
                 } catch (fallbackError) {
                     console.error("Error with local fallback storage:", fallbackError);
@@ -371,19 +342,14 @@ const createCampaignRequest = async (req, res) => {
         });
         
         await campaignRequest.save();
-        console.log(`Campaign request saved with ID: ${campaignRequest._id}`);
         
         // Update file uploads with the campaign request ID
         if (creativeFiles.length > 0) {
-            console.log('Updating file records with campaign request ID...');
             await FileUpload.updateMany(
                 { _id: { $in: creativeFiles.map(file => file._id) } },
                 { $set: { entityId: campaignRequest._id } }
             );
         }
-        
-        // Log activity
-        console.log('Creating activity log entry...');
         await ActivityLog.create({
             actorId: adminId,
             actorModel: 'Admins',
@@ -394,9 +360,6 @@ const createCampaignRequest = async (req, res) => {
             description: `Campaign request "${name}" was submitted by admin`,
             status: 'success'
         });
-        
-        // Create notification for Super Admins
-        console.log('Creating notification for Super Admins...');
         await Notification.create({
             title: 'New Campaign Request',
             description: `${admin.first_name} ${admin.last_name} has submitted a new campaign request: ${name}`,
@@ -408,8 +371,6 @@ const createCampaignRequest = async (req, res) => {
             },
             priority: 'medium'
         });
-        
-        console.log('Campaign request process completed successfully');
         res.status(201).json({
             success: true,
             message: "Campaign request submitted successfully",
@@ -421,7 +382,6 @@ const createCampaignRequest = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error("Error creating campaign request:", error);
         res.status(500).json({
             success: false,
             message: "Internal server error",
