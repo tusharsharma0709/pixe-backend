@@ -56,6 +56,8 @@ if (!admin.apps.length) {
 
 module.exports = { admin };
 const app = express();
+// Set up static file serving
+app.use(express.static(path.join(__dirname, 'public')));
 // Add this to app.js before routes to modify URL parsing
 app.set('query parser', (queryString) => {
     console.log('Raw query string:', queryString);

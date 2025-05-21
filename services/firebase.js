@@ -3,10 +3,7 @@ const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
 
-/**
- * Get Firebase Storage bucket
- * @returns {Bucket} Firebase Storage bucket
- */
+// services/firebase.js
 const getBucket = () => {
     // Check if Firebase is already initialized
     if (!admin.apps.length) {
@@ -26,19 +23,37 @@ const getBucket = () => {
                 console.log('Firebase initialized with service account file');
             } else {
                 // Use environment variables
+                if (!process.env.FIREBASE_PROJECT_ID) {
+                    console.error('Missing FIREBASE_PROJECT_ID');
+                }
+                if (!process.env.FIREBASE_CLIENT_EMAIL) {
+                    console.error('Missing FIREBASE_CLIENT_EMAIL');
+                }
+                if (!process.env.FIREBASE_PRIVATE_KEY) {
+                    console.error('Missing FIREBASE_PRIVATE_KEY');
+                }
+                if (!process.env.FIREBASE_STORAGE_BUCKET) {
+                    console.error('Missing FIREBASE_STORAGE_BUCKET');
+                }
+                
                 if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_CLIENT_EMAIL || !process.env.FIREBASE_PRIVATE_KEY) {
                     throw new Error('Firebase environment variables are missing');
                 }
+                
+                // Print first few characters of private key for debugging
+                const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
+                console.log(`Private key starts with: ${privateKey.substring(0, 20)}...`);
                 
                 admin.initializeApp({
                     credential: admin.credential.cert({
                         projectId: process.env.FIREBASE_PROJECT_ID,
                         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+                        privateKey: privateKey
                     }),
                     storageBucket: process.env.FIREBASE_STORAGE_BUCKET
                 });
                 console.log('Firebase initialized with environment variables');
+                console.log(`Using storage bucket: ${process.env.FIREBASE_STORAGE_BUCKET}`);
             }
         } catch (error) {
             console.error('Firebase initialization error:', error);
@@ -48,7 +63,9 @@ const getBucket = () => {
     
     // Get and return the bucket
     try {
-        return admin.storage().bucket();
+        const bucket = admin.storage().bucket();
+        console.log(`Got Firebase bucket: ${bucket.name}`);
+        return bucket;
     } catch (error) {
         console.error('Error getting Firebase bucket:', error);
         throw new Error(`Failed to get Firebase bucket: ${error.message}`);
