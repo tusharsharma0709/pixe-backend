@@ -1,4 +1,4 @@
-// controllers/campaignWorkflowController.js
+// controllers/campaignRequestControllers.js
 const { CampaignRequest } = require('../models/CampaignRequests');
 const { Campaign } = require('../models/Campaigns');
 const { Admin } = require('../models/Admins');
@@ -7,7 +7,25 @@ const { Workflow } = require('../models/Workflows');
 const { Notification } = require('../models/Notifications');
 const { ActivityLog } = require('../models/ActivityLogs');
 const { FileUpload } = require('../models/FileUploads');
-const upload = require('../middlewares/multer');
+const multer = require('../middlewares/multer');
+const admin = require('firebase-admin');
+const crypto = require('crypto');
+const path = require('path');
+
+// Initialize Firebase storage bucket
+const getBucket = () => {
+    if (!admin.apps.length) {
+        admin.initializeApp({
+            credential: admin.credential.cert({
+                projectId: process.env.FIREBASE_PROJECT_ID,
+                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+            }),
+            storageBucket: process.env.FIREBASE_STORAGE_BUCKET
+        });
+    }
+    return admin.storage().bucket();
+};
 
 /**
  * Admin Functions
@@ -117,25 +135,59 @@ const createCampaignRequest = async (req, res) => {
         // Process uploaded files if any
         let creativeFiles = [];
         if (req.files && Array.isArray(req.files)) {
+            const bucket = getBucket();
+            
             for (const file of req.files) {
-                const fileUpload = new FileUpload({
-                    filename: file.filename || `campaign_creative_${Date.now()}`,
-                    originalFilename: file.originalname,
-                    path: file.path || file.location,
-                    url: file.location || file.path,
-                    mimeType: file.mimetype,
-                    size: file.size,
-                    uploadedBy: {
-                        id: adminId,
-                        role: 'admin'
-                    },
-                    adminId,
-                    entityType: 'campaign_request',
-                    isPublic: true
-                });
-                
-                await fileUpload.save();
-                creativeFiles.push(fileUpload);
+                try {
+                    // Generate unique filename
+                    const fileExt = path.extname(file.originalname);
+                    const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
+                    const filePath = `uploads/campaigns/${new Date().getFullYear()}/${new Date().getMonth() + 1}/${filename}`;
+                    
+                    // Create a file in Firebase Storage
+                    const fileRef = bucket.file(filePath);
+                    
+                    // Upload file to Firebase Storage
+                    await fileRef.save(file.buffer, {
+                        metadata: {
+                            contentType: file.mimetype,
+                            originalName: file.originalname
+                        },
+                        public: true,
+                        resumable: false
+                    });
+                    
+                    // Get public URL
+                    const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+                    
+                    // Create file upload record
+                    const fileUpload = await FileUpload.create({
+                        filename,
+                        originalFilename: file.originalname,
+                        path: filePath,
+                        url: fileUrl,
+                        mimeType: file.mimetype,
+                        size: file.size,
+                        uploadedBy: {
+                            id: adminId,
+                            role: 'admin'
+                        },
+                        adminId,
+                        entityType: 'campaign_request',
+                        status: 'permanent',
+                        isPublic: true,
+                        bucket: bucket.name,
+                        storageProvider: 'google_cloud',
+                        storageMetadata: {
+                            firebasePath: filePath
+                        }
+                    });
+                    
+                    creativeFiles.push(fileUpload);
+                } catch (fileError) {
+                    console.error("Error uploading file:", fileError);
+                    // Continue with other files even if one fails
+                }
             }
         }
         
@@ -162,6 +214,14 @@ const createCampaignRequest = async (req, res) => {
         });
         
         await campaignRequest.save();
+        
+        // Update file uploads with the campaign request ID
+        if (creativeFiles.length > 0) {
+            await FileUpload.updateMany(
+                { _id: { $in: creativeFiles.map(file => file._id) } },
+                { $set: { entityId: campaignRequest._id } }
+            );
+        }
         
         // Log activity
         await ActivityLog.create({
@@ -450,7 +510,7 @@ const reviewCampaignRequest = async (req, res) => {
             title: `Campaign Request ${status === 'approved' ? 'Approved' : status === 'rejected' ? 'Rejected' : 'Under Review'}`,
             description: `Your campaign request "${campaignRequest.name}" has been ${status === 'approved' ? 'approved' : status === 'rejected' ? 'rejected' : 'placed under review'}`,
             type: 'campaign_request',
-            adminId: campaignRequest.adminId, // Changed from forAdmin
+            adminId: campaignRequest.adminId,
             relatedTo: {
                 model: 'CampaignRequest',
                 id: campaignRequest._id
@@ -569,6 +629,12 @@ const publishCampaign = async (req, res) => {
         
         await campaignRequest.save();
         
+        // Update any file uploads to link to the published campaign
+        await FileUpload.updateMany(
+            { entityType: 'campaign_request', entityId: campaignRequest._id },
+            { $set: { entityType: 'campaign', entityId: campaign._id } }
+        );
+        
         // Get admin details for notification
         const admin = await Admin.findById(campaignRequest.adminId);
         
@@ -577,7 +643,7 @@ const publishCampaign = async (req, res) => {
             title: 'Campaign Published',
             description: `Your campaign "${campaignRequest.name}" has been published and is now active`,
             type: 'campaign_published',
-            forAdmin: campaignRequest.adminId,
+            adminId: campaignRequest.adminId,
             relatedTo: {
                 model: 'Campaign',
                 id: campaign._id
@@ -623,14 +689,125 @@ const publishCampaign = async (req, res) => {
     }
 };
 
+// Add these methods to controllers/campaignRequestControllers.js
+
+/**
+ * Get campaign request by ID (Admin)
+ */
+const getCampaignRequestById = async (req, res) => {
+    try {
+        const adminId = req.adminId;
+        const { id } = req.params;
+        
+        // Find campaign request
+        const campaignRequest = await CampaignRequest.findById(id)
+            .populate('workflowId', 'name')
+            .populate('superAdminId', 'first_name last_name')
+            .populate('publishedCampaignId', 'name status');
+        
+        if (!campaignRequest) {
+            return res.status(404).json({
+                success: false,
+                message: "Campaign request not found"
+            });
+        }
+        
+        // Check if campaign request belongs to the admin
+        if (campaignRequest.adminId.toString() !== adminId) {
+            return res.status(403).json({
+                success: false,
+                message: "You do not have permission to view this campaign request"
+            });
+        }
+        
+        // Get associated files
+        const files = await FileUpload.find({
+            entityType: 'campaign_request',
+            entityId: campaignRequest._id,
+            status: { $ne: 'deleted' }
+        });
+        
+        res.status(200).json({
+            success: true,
+            message: "Campaign request fetched successfully",
+            data: {
+                campaignRequest,
+                files
+            }
+        });
+    } catch (error) {
+        console.error("Error getting campaign request:", error);
+        res.status(500).json({
+            success: false,
+            message: "Internal server error",
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get campaign request details (Super Admin)
+ */
+const getCampaignRequestDetails = async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Find campaign request
+        const campaignRequest = await CampaignRequest.findById(id)
+            .populate('adminId', 'first_name last_name email_id')
+            .populate('workflowId', 'name')
+            .populate('superAdminId', 'first_name last_name')
+            .populate('publishedCampaignId', 'name status');
+        
+        if (!campaignRequest) {
+            return res.status(404).json({
+                success: false,
+                message: "Campaign request not found"
+            });
+        }
+        
+        // Get admin details
+        const admin = await Admin.findById(campaignRequest.adminId).select('fb_credentials_verified');
+        
+        // Get associated files
+        const files = await FileUpload.find({
+            entityType: 'campaign_request',
+            entityId: campaignRequest._id,
+            status: { $ne: 'deleted' }
+        });
+        
+        res.status(200).json({
+            success: true,
+            message: "Campaign request details fetched successfully",
+            data: {
+                campaignRequest,
+                files,
+                adminDetails: {
+                    fb_credentials_verified: admin.fb_credentials_verified
+                }
+            }
+        });
+    } catch (error) {
+        console.error("Error getting campaign request details:", error);
+        res.status(500).json({
+            success: false,
+            message: "Internal server error",
+            error: error.message
+        });
+    }
+};
+
+// Don't forget to add these to the exports
 module.exports = {
     // Admin endpoints
     createCampaignRequest,
     getAdminCampaignRequests,
+    getCampaignRequestById,
     getAdminCampaigns,
     
     // Super Admin endpoints
     getAllCampaignRequests,
+    getCampaignRequestDetails,
     reviewCampaignRequest,
     publishCampaign
 };

@@ -60,7 +60,7 @@ const fileUploadSchema = new mongoose.Schema({
     entityType: {
         type: String,
         enum: [
-            'user_profile', 'product', 'campaign', 'admin_profile', 'agent_profile', 
+            'user_profile', 'product', 'campaign', 'campaign_request', 'admin_profile', 'agent_profile', 
             'verification', 'message', 'order', 'payment', 'feedback', 'chat', 'other'
         ],
         default: 'other'

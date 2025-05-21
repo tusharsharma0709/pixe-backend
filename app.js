@@ -137,6 +137,11 @@ const webhookLimiter = rateLimit({
 });
 
 app.use('/api/whatsapp/webhook', webhookLimiter);
+// Add this near your routes in app.js
+const multer = require('./middlewares/multer');
+
+// Apply this after your routes but before the 404 handler
+app.use(multer.handleMulterError);
 
 // API Routes
 app.use('/api/admin', adminRoutes);
