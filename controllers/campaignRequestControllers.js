@@ -51,6 +51,7 @@ const createCampaignRequest = async (req, res) => {
         }
         
         if (!admin.status) {
+            console.log(`Admin account is not active: ${adminId}`);
             return res.status(403).json({
                 success: false,
                 message: "Your account is not active. Please contact the Super Admin."
@@ -78,6 +79,21 @@ const createCampaignRequest = async (req, res) => {
             catalogId,
             adminNotes
         } = req.body;
+        
+        console.log('Request body:', {
+            name, 
+            description, 
+            objective, 
+            adType, 
+            platform,
+            targeting: typeof targeting, 
+            budgetSchedule: typeof budgetSchedule, 
+            creatives: typeof creatives, 
+            workflowId,
+            pixelId,
+            catalogId,
+            adminNotes
+        });
         
         // Parse JSON strings if coming from form-data
         try {
@@ -247,8 +263,8 @@ const createCampaignRequest = async (req, res) => {
                             resumable: false
                         });
                         
-                        // Get URL with the new helper function
-                        const fileUrl = formatFileUrl(bucket.name, filePath);
+                        // Get public URL
+                        const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
                         
                         // Create file upload record
                         const fileUpload = await FileUpload.create({
