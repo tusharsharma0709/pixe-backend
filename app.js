@@ -176,11 +176,6 @@ const multer = require('./middlewares/multer');
 // Apply this after your routes but before the 404 handler
 app.use(multer.handleMulterError);
 
-const urlTransformer = require('./middlewares/urlTransformer');
-
-// Add the middleware
-app.use(urlTransformer);
-
 // API Routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/agent', agentRoutes);
