@@ -30,20 +30,14 @@ const saveFileLocally = async (file, userId, userRole = 'admin', entityType = 'c
     const fileExt = path.extname(file.originalname);
     const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
     const relativePath = `/uploads/${entityType}/${filename}`;
-    const filePath = path.join(baseDir, entityType, filename);
     
-    // Save file to local storage
-    fs.writeFileSync(filePath, file.buffer);
-    
-    // Get server base URL from environment or default
-    const baseUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3000}`;
     
     // Create file upload record
     const fileUpload = await FileUpload.create({
         filename,
         originalFilename: file.originalname,
         path: relativePath,
-        url: `${baseUrl}${relativePath}`,
+        url: relativePath, // Just use the relative path here!
         mimeType: file.mimetype,
         size: file.size,
         uploadedBy: {
