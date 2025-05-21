@@ -4,25 +4,25 @@ const path = require('path');
 const crypto = require('crypto');
 const { FileUpload } = require('../models/FileUploads');
 
-/**
- * Save a file to local storage
- * @param {Object} file - Multer file object
- * @param {string} userId - ID of the user uploading the file
- * @param {string} userRole - Role of the user (admin, superadmin, etc.)
- * @param {string} entityType - Type of entity the file belongs to
- * @param {string|null} entityId - ID of the entity the file belongs to
- * @returns {Promise<Object>} - File upload record
- */
 const saveFileLocally = async (file, userId, userRole = 'admin', entityType = 'campaign_request', entityId = null) => {
-    // Create directories and save file - existing code remains unchanged
+    // Fix: Define baseDir here
+    const baseDir = path.join(process.env.LOCAL_STORAGE_PATH || 'public/uploads');
     
-    // Generate unique filename
+    // Create directory if it doesn't exist
+    const entityDir = path.join(baseDir, entityType);
+    if (!fs.existsSync(baseDir)) {
+        fs.mkdirSync(baseDir, { recursive: true });
+    }
+    if (!fs.existsSync(entityDir)) {
+        fs.mkdirSync(entityDir, { recursive: true });
+    }
+    
+    // Rest of your original function...
     const fileExt = path.extname(file.originalname);
     const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
     const relativePath = `/uploads/${entityType}/${filename}`;
     const filePath = path.join(baseDir, entityType, filename);
     
-    // Save file to local storage
     fs.writeFileSync(filePath, file.buffer);
     
     // Format URL consistently
