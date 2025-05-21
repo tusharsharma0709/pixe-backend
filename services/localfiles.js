@@ -30,6 +30,7 @@ const saveFileLocally = async (file, userId, userRole = 'admin', entityType = 'c
     const fileExt = path.extname(file.originalname);
     const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
     const relativePath = `/uploads/${entityType}/${filename}`;
+    const filePath = path.join(baseDir, entityType, filename);
     
     // Save file to local storage
     fs.writeFileSync(filePath, file.buffer);
