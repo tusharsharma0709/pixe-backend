@@ -55,7 +55,18 @@ const getBucket = () => {
     }
 };
 
+const formatFileUrl = (bucket, filePath) => {
+    if (process.env.USE_RELATIVE_URLS === 'true') {
+        // Use relative URL for consistency
+        return `/${filePath}`;
+    } else {
+        // Use full Firebase URL
+        return `https://storage.googleapis.com/${bucket}/${filePath}`;
+    }
+};
+
 module.exports = {
     admin,
-    getBucket
+    getBucket,
+    formatFileUrl
 };

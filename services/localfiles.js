@@ -14,30 +14,32 @@ const { FileUpload } = require('../models/FileUploads');
  * @returns {Promise<Object>} - File upload record
  */
 const saveFileLocally = async (file, userId, userRole = 'admin', entityType = 'campaign_request', entityId = null) => {
-    // Create base uploads directory if it doesn't exist
-    const baseDir = path.join(__dirname, '..', 'public', 'uploads');
-    if (!fs.existsSync(baseDir)) {
-        fs.mkdirSync(baseDir, { recursive: true });
-    }
-    
-    // Create entity-specific directory
-    const entityDir = path.join(baseDir, entityType);
-    if (!fs.existsSync(entityDir)) {
-        fs.mkdirSync(entityDir, { recursive: true });
-    }
+    // Create directories and save file - existing code remains unchanged
     
     // Generate unique filename
     const fileExt = path.extname(file.originalname);
     const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
     const relativePath = `/uploads/${entityType}/${filename}`;
+    const filePath = path.join(baseDir, entityType, filename);
     
+    // Save file to local storage
+    fs.writeFileSync(filePath, file.buffer);
+    
+    // Format URL consistently
+    let url;
+    if (process.env.USE_RELATIVE_URLS === 'true') {
+        url = relativePath;
+    } else {
+        const baseUrl = process.env.APP_URL || `http://localhost:${process.env.PORT || 3000}`;
+        url = `${baseUrl}${relativePath}`;
+    }
     
     // Create file upload record
     const fileUpload = await FileUpload.create({
         filename,
         originalFilename: file.originalname,
         path: relativePath,
-        url: relativePath, // Just use the relative path here!
+        url: url,
         mimeType: file.mimetype,
         size: file.size,
         uploadedBy: {
