@@ -1,219 +1,473 @@
-// controllers/productRequestController.js
+// controllers/productRequestControllers.js
 const { ProductRequest } = require('../models/ProductRequests');
-const { Product } = require('../models/Products');
 const { ProductCatalog } = require('../models/ProductCatalogs');
-const { Admin } = require('../models/Admins');
-const { SuperAdmin } = require('../models/SuperAdmins');
-const { Notification } = require('../models/Notifications');
-const { ActivityLog } = require('../models/ActivityLogs');
+const { Product } = require('../models/Products'); // Assuming you have a Products model
 const { FileUpload } = require('../models/FileUploads');
-const upload = require('../middlewares/multer');
+const { getBucket } = require('../services/firebase');
+const crypto = require('crypto');
+const path = require('path');
+const mongoose = require('mongoose');
 
 /**
- * Admin Functions
+ * Create a new product request with images uploaded to Firebase
  */
-
-/**
- * Create a new product request
- */
-const createProductRequest = async (req, res) => {
+exports.createProductRequest = async (req, res) => {
     try {
         const adminId = req.adminId;
-        
-        // Validate the admin exists and is active
-        const admin = await Admin.findById(adminId);
-        if (!admin) {
-            return res.status(404).json({
-                success: false,
-                message: "Admin not found"
-            });
-        }
-        
-        if (!admin.status) {
-            return res.status(403).json({
-                success: false,
-                message: "Your account is not active. Please contact the Super Admin."
-            });
-        }
-        
-        // Check if admin has verified Facebook credentials
-        if (!admin.fb_credentials_verified) {
-            return res.status(400).json({
-                success: false,
-                message: "You need to verify your Facebook credentials before creating product requests"
-            });
-        }
-        
-        // Extract data from request
-        let { 
-            name, 
-            description, 
-            price, 
-            salePrice,
-            currency,
-            category,
-            subCategory,
-            brand,
-            attributes,
-            inventory,
-            shipping,
-            isDigital,
-            hasVariants,
-            catalogId,
-            adminNotes,
-            taxable,
-            taxClass,
-            taxRate
-        } = req.body;
-        
-        // Parse JSON strings if coming from form-data
-        try {
-            if (typeof attributes === 'string') {
-                attributes = JSON.parse(attributes);
-            }
-            if (typeof inventory === 'string') {
-                inventory = JSON.parse(inventory);
-            }
-            if (typeof shipping === 'string') {
-                shipping = JSON.parse(shipping);
-            }
-        } catch (parseError) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid JSON format in request data",
-                error: parseError.message
-            });
-        }
-        
+        const productData = req.body;
+        const files = req.files; // Multer places uploaded files here
+
         // Validate required fields
-        if (!name || !price) {
+        if (!productData.name || !productData.price) {
             return res.status(400).json({
                 success: false,
-                message: "Name and price are required"
+                message: "Product name and price are required"
             });
         }
-        
-        // Validate catalog if provided
-        if (catalogId) {
-            const catalog = await ProductCatalog.findById(catalogId);
+
+        // If catalogId is provided, verify it exists and belongs to the admin
+        if (productData.catalogId) {
+            const catalog = await ProductCatalog.findOne({
+                _id: productData.catalogId,
+                adminId: adminId
+            });
+
             if (!catalog) {
                 return res.status(404).json({
                     success: false,
-                    message: "Product catalog not found"
-                });
-            }
-            
-            // Check if the catalog belongs to the admin
-            if (catalog.adminId.toString() !== adminId) {
-                return res.status(403).json({
-                    success: false,
-                    message: "You do not have permission to use this catalog"
+                    message: "Catalog not found or you don't have access to it"
                 });
             }
         }
-        
-        // Process uploaded files if any
+
+        // Process uploaded images with Firebase
         let productImages = [];
-        if (req.files && Array.isArray(req.files)) {
-            for (const file of req.files) {
-                // Ensure we have both path and URL
-                const filePath = file.path || file.location || `/uploads/${file.filename}`;
-                const fileUrl = file.location || file.path || `/uploads/${file.filename}`;
+        if (files && Array.isArray(files) && files.length > 0) {
+            try {
+                // Get Firebase Storage bucket
+                const bucket = getBucket();
+                console.log(`Got Firebase bucket: ${bucket.name}`);
                 
-                const fileUpload = new FileUpload({
-                    filename: file.filename || `product_image_${Date.now()}`,
-                    originalFilename: file.originalname,
-                    path: filePath,
-                    url: fileUrl,
-                    mimeType: file.mimetype,
-                    size: file.size,
-                    uploadedBy: {
-                        id: adminId,
-                        role: 'admin'
-                    },
-                    adminId,
-                    entityType: 'product', // Changed from 'product_request' to 'product'
-                    isPublic: true
-                });
-                
-                await fileUpload.save();
-                productImages.push({
-                    url: fileUpload.url,
-                    isPrimary: productImages.length === 0, // First image is primary
-                    caption: name
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    
+                    // Generate unique filename
+                    const fileExt = path.extname(file.originalname);
+                    const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
+                    
+                    // Create folder structure by date: yyyy/mm/
+                    const currentDate = new Date();
+                    const year = currentDate.getFullYear();
+                    const month = currentDate.getMonth() + 1;
+                    
+                    // Create a path in Firebase Storage
+                    const filePath = `uploads/products/${year}/${month}/${filename}`;
+                    
+                    // Upload to Firebase
+                    console.log(`Uploading product image to Firebase: ${filePath}`);
+                    const fileRef = bucket.file(filePath);
+                    await fileRef.save(file.buffer, {
+                        metadata: {
+                            contentType: file.mimetype,
+                            originalName: file.originalname
+                        },
+                        public: true,
+                        resumable: false
+                    });
+                    
+                    // Get public URL
+                    const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+                    console.log(`Product image uploaded to Firebase: ${fileUrl}`);
+                    
+                    // Create file upload record
+                    const fileUpload = await FileUpload.create({
+                        filename,
+                        originalFilename: file.originalname,
+                        path: filePath,
+                        url: fileUrl,
+                        mimeType: file.mimetype,
+                        size: file.size,
+                        uploadedBy: {
+                            id: adminId,
+                            role: 'admin'
+                        },
+                        adminId,
+                        entityType: 'product',
+                        status: 'permanent',
+                        isPublic: true,
+                        bucket: bucket.name,
+                        storageProvider: 'google_cloud',
+                        storageMetadata: {
+                            firebasePath: filePath
+                        }
+                    });
+                    
+                    // Add to product images array
+                    productImages.push({
+                        url: fileUrl,
+                        isPrimary: i === 0, // First image is primary by default
+                        caption: productData.imageCaptions && productData.imageCaptions[i] 
+                          ? productData.imageCaptions[i] 
+                          : null
+                    });
+                }
+            } catch (firebaseError) {
+                console.error("Error uploading product images to Firebase:", firebaseError);
+                return res.status(500).json({
+                    success: false,
+                    message: "Error uploading product images",
+                    error: firebaseError.message
                 });
             }
         }
-        
-        // Create product request
+
+        // Create the product request with images
         const productRequest = new ProductRequest({
             adminId,
-            name,
-            description,
-            price: parseFloat(price),
-            salePrice: salePrice ? parseFloat(salePrice) : undefined,
-            currency: currency || 'INR',
-            category: category || 'general',
-            subCategory,
-            brand,
+            name: productData.name,
+            description: productData.description,
+            price: parseFloat(productData.price),
+            salePrice: productData.salePrice ? parseFloat(productData.salePrice) : null,
+            currency: productData.currency || 'INR',
+            category: productData.category || 'general',
+            subCategory: productData.subCategory || null,
+            brand: productData.brand || null,
             images: productImages,
-            attributes: attributes || [],
-            inventory: inventory || { quantity: 0 },
-            shipping: shipping || {},
-            isDigital: isDigital || false,
-            hasVariants: hasVariants || false,
-            catalogId,
-            status: 'submitted',
-            adminNotes,
-            taxable: taxable !== undefined ? taxable : true,
-            taxClass: taxClass || 'standard',
-            taxRate: taxRate !== undefined ? parseFloat(taxRate) : null
-        });
-        
-        await productRequest.save();
-        
-        // Log activity
-        await ActivityLog.create({
-            actorId: adminId,
-            actorModel: 'Admins',
-            actorName: `${admin.first_name} ${admin.last_name}`,
-            action: 'product_requested',
-            entityType: 'ProductRequest',
-            entityId: productRequest._id,
-            description: `Product request "${name}" was submitted by admin`,
-            status: 'success',
-            adminId: adminId
-        });
-        
-        // Create notification for Super Admins
-        await Notification.create({
-            title: 'New Product Request',
-            description: `${admin.first_name} ${admin.last_name} has submitted a new product request: ${name}`,
-            type: 'product_request',
-            forSuperAdmin: true,
-            relatedTo: {
-                model: 'ProductRequest',
-                id: productRequest._id
+            attributes: productData.attributes ? JSON.parse(productData.attributes) : [],
+            inventory: {
+                quantity: productData.quantity ? parseInt(productData.quantity) : 0,
+                sku: productData.sku || null,
+                managementType: productData.inventoryManagement || 'manual'
             },
-            priority: 'medium'
+            shipping: {
+                weight: productData.weight ? parseFloat(productData.weight) : null,
+                weightUnit: productData.weightUnit || 'g',
+                dimensions: {
+                    length: productData.length ? parseFloat(productData.length) : null,
+                    width: productData.width ? parseFloat(productData.width) : null,
+                    height: productData.height ? parseFloat(productData.height) : null,
+                    unit: productData.dimensionUnit || 'cm'
+                },
+                shippingClass: productData.shippingClass || 'standard'
+            },
+            isDigital: productData.isDigital === 'true',
+            hasVariants: productData.hasVariants === 'true',
+            status: productData.status || 'draft',
+            catalogId: productData.catalogId || null,
+            adminNotes: productData.adminNotes || null,
+            taxable: productData.taxable === 'true',
+            taxClass: productData.taxClass || 'standard',
+            taxRate: productData.taxRate ? parseFloat(productData.taxRate) : null
         });
-        
+
+        // Save the product request
+        await productRequest.save();
+
         res.status(201).json({
             success: true,
-            message: "Product request submitted successfully",
-            data: {
-                _id: productRequest._id,
-                name: productRequest.name,
-                price: productRequest.price,
-                status: productRequest.status,
-                createdAt: productRequest.createdAt
-            }
+            message: "Product request created successfully",
+            productRequest
         });
     } catch (error) {
-        console.error("Error creating product request:", error);
+        console.error("Create product request error:", error);
         res.status(500).json({
             success: false,
-            message: "Internal server error",
+            message: "Error creating product request",
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Update a product request including handling image updates
+ */
+exports.updateProductRequest = async (req, res) => {
+    try {
+        const adminId = req.adminId;
+        const productId = req.params.id;
+        const updateData = req.body;
+        const files = req.files;
+
+        // Find the product request
+        const productRequest = await ProductRequest.findOne({
+            _id: productId,
+            adminId: adminId
+        });
+
+        if (!productRequest) {
+            return res.status(404).json({
+                success: false,
+                message: "Product request not found or you don't have access to it"
+            });
+        }
+
+        // Check if product can be updated
+        if (['approved', 'rejected', 'published'].includes(productRequest.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot update product in ${productRequest.status} status`
+            });
+        }
+
+        // If catalogId is being updated, verify it exists and belongs to the admin
+        if (updateData.catalogId && updateData.catalogId !== productRequest.catalogId?.toString()) {
+            const catalog = await ProductCatalog.findOne({
+                _id: updateData.catalogId,
+                adminId: adminId
+            });
+
+            if (!catalog) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Catalog not found or you don't have access to it"
+                });
+            }
+        }
+
+        // Process new uploaded images
+        let newImages = [];
+        if (files && Array.isArray(files) && files.length > 0) {
+            try {
+                // Get Firebase Storage bucket
+                const bucket = getBucket();
+                
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    
+                    // Generate unique filename
+                    const fileExt = path.extname(file.originalname);
+                    const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
+                    
+                    // Create folder structure by date: yyyy/mm/
+                    const currentDate = new Date();
+                    const year = currentDate.getFullYear();
+                    const month = currentDate.getMonth() + 1;
+                    
+                    // Create a path in Firebase Storage
+                    const filePath = `uploads/products/${year}/${month}/${filename}`;
+                    
+                    // Upload to Firebase
+                    console.log(`Uploading product image to Firebase: ${filePath}`);
+                    const fileRef = bucket.file(filePath);
+                    await fileRef.save(file.buffer, {
+                        metadata: {
+                            contentType: file.mimetype,
+                            originalName: file.originalname
+                        },
+                        public: true,
+                        resumable: false
+                    });
+                    
+                    // Get public URL
+                    const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+                    console.log(`Product image uploaded to Firebase: ${fileUrl}`);
+                    
+                    // Create file upload record
+                    const fileUpload = await FileUpload.create({
+                        filename,
+                        originalFilename: file.originalname,
+                        path: filePath,
+                        url: fileUrl,
+                        mimeType: file.mimetype,
+                        size: file.size,
+                        uploadedBy: {
+                            id: adminId,
+                            role: 'admin'
+                        },
+                        adminId,
+                        entityType: 'product',
+                        status: 'permanent',
+                        isPublic: true,
+                        bucket: bucket.name,
+                        storageProvider: 'google_cloud',
+                        storageMetadata: {
+                            firebasePath: filePath
+                        }
+                    });
+                    
+                    // Add to new images array
+                    newImages.push({
+                        url: fileUrl,
+                        isPrimary: false, // By default, new images are not primary
+                        caption: updateData.newImageCaptions && updateData.newImageCaptions[i] 
+                          ? updateData.newImageCaptions[i] 
+                          : null
+                    });
+                }
+            } catch (firebaseError) {
+                console.error("Error uploading new product images to Firebase:", firebaseError);
+                return res.status(500).json({
+                    success: false,
+                    message: "Error uploading new product images",
+                    error: firebaseError.message
+                });
+            }
+        }
+
+        // Handle existing images (keep, update, or remove)
+        let finalImages = [];
+        
+        // If existingImages is provided as a stringified array, parse it
+        let existingImages = [];
+        if (updateData.existingImages) {
+            try {
+                existingImages = JSON.parse(updateData.existingImages);
+            } catch (e) {
+                console.warn("Could not parse existingImages:", e);
+                // Fallback to empty array if parsing fails
+                existingImages = [];
+            }
+        }
+        
+        if (existingImages && Array.isArray(existingImages) && existingImages.length > 0) {
+            // Filter out images that are being kept
+            finalImages = productRequest.images.filter(img => 
+                existingImages.some(existImg => existImg.url === img.url)
+            );
+            
+            // Update captions and isPrimary status for existing images
+            finalImages = finalImages.map(img => {
+                const updatedImg = existingImages.find(existImg => existImg.url === img.url);
+                return {
+                    url: img.url,
+                    isPrimary: updatedImg.isPrimary || img.isPrimary,
+                    caption: updatedImg.caption || img.caption
+                };
+            });
+        } else if (updateData.removeAllImages !== 'true') {
+            // No explicit instructions about existing images and not removing all, keep them all
+            finalImages = [...productRequest.images];
+        }
+        
+        // Add new images
+        finalImages = [...finalImages, ...newImages];
+        
+        // Ensure there's a primary image if any images exist
+        if (finalImages.length > 0 && !finalImages.some(img => img.isPrimary)) {
+            finalImages[0].isPrimary = true;
+        }
+
+        // Prepare update object with proper type conversion
+        const productUpdateData = {
+            name: updateData.name,
+            description: updateData.description,
+            price: updateData.price ? parseFloat(updateData.price) : productRequest.price,
+            salePrice: updateData.salePrice ? parseFloat(updateData.salePrice) : productRequest.salePrice,
+            currency: updateData.currency || productRequest.currency,
+            category: updateData.category || productRequest.category,
+            subCategory: updateData.subCategory || productRequest.subCategory,
+            brand: updateData.brand || productRequest.brand,
+            images: finalImages,
+            status: updateData.status || productRequest.status,
+            catalogId: updateData.catalogId || productRequest.catalogId,
+            adminNotes: updateData.adminNotes || productRequest.adminNotes,
+            isDigital: updateData.isDigital === 'true',
+            hasVariants: updateData.hasVariants === 'true',
+            taxable: updateData.taxable === 'true',
+            taxClass: updateData.taxClass || productRequest.taxClass,
+            taxRate: updateData.taxRate ? parseFloat(updateData.taxRate) : productRequest.taxRate
+        };
+
+        // Handle nested objects
+        if (updateData.quantity || updateData.sku || updateData.inventoryManagement) {
+            productUpdateData.inventory = {
+                quantity: updateData.quantity ? parseInt(updateData.quantity) : productRequest.inventory.quantity,
+                sku: updateData.sku || productRequest.inventory.sku,
+                managementType: updateData.inventoryManagement || productRequest.inventory.managementType
+            };
+        }
+
+        if (updateData.weight || updateData.weightUnit || 
+            updateData.length || updateData.width || updateData.height || 
+            updateData.dimensionUnit || updateData.shippingClass) {
+            
+            productUpdateData.shipping = {
+                weight: updateData.weight ? parseFloat(updateData.weight) : productRequest.shipping.weight,
+                weightUnit: updateData.weightUnit || productRequest.shipping.weightUnit,
+                dimensions: {
+                    length: updateData.length ? parseFloat(updateData.length) : productRequest.shipping.dimensions.length,
+                    width: updateData.width ? parseFloat(updateData.width) : productRequest.shipping.dimensions.width,
+                    height: updateData.height ? parseFloat(updateData.height) : productRequest.shipping.dimensions.height,
+                    unit: updateData.dimensionUnit || productRequest.shipping.dimensions.unit
+                },
+                shippingClass: updateData.shippingClass || productRequest.shipping.shippingClass
+            };
+        }
+
+        // Handle attributes (parsing from JSON if needed)
+        if (updateData.attributes) {
+            try {
+                productUpdateData.attributes = JSON.parse(updateData.attributes);
+            } catch (e) {
+                console.warn("Could not parse attributes:", e);
+                // Keep existing attributes if parsing fails
+                productUpdateData.attributes = productRequest.attributes;
+            }
+        }
+
+        // Update product request - use findByIdAndUpdate for atomicity
+        const updatedProductRequest = await ProductRequest.findByIdAndUpdate(
+            productId,
+            { $set: productUpdateData },
+            { new: true, runValidators: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: "Product request updated successfully",
+            productRequest: updatedProductRequest
+        });
+    } catch (error) {
+        console.error("Update product request error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error updating product request",
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Delete a product request
+ */
+exports.deleteProductRequest = async (req, res) => {
+    try {
+        const adminId = req.adminId;
+        const productId = req.params.id;
+
+        // Find the product request
+        const productRequest = await ProductRequest.findOne({
+            _id: productId,
+            adminId: adminId
+        });
+
+        if (!productRequest) {
+            return res.status(404).json({
+                success: false,
+                message: "Product request not found or you don't have access to it"
+            });
+        }
+
+        // Check if product can be deleted
+        if (['approved', 'published'].includes(productRequest.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot delete product in ${productRequest.status} status`
+            });
+        }
+
+        // Delete the product request
+        await ProductRequest.findByIdAndDelete(productId);
+
+        res.status(200).json({
+            success: true,
+            message: "Product request deleted successfully"
+        });
+    } catch (error) {
+        console.error("Delete product request error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error deleting product request",
             error: error.message
         });
     }
@@ -222,702 +476,348 @@ const createProductRequest = async (req, res) => {
 /**
  * Get all product requests for an admin
  */
-const getAdminProductRequests = async (req, res) => {
+exports.getAdminProductRequests = async (req, res) => {
     try {
         const adminId = req.adminId;
-        const { status, limit = 20, page = 1, sort = 'createdAt', order = 'desc' } = req.query;
-        
+        const { status, page = 1, limit = 10, sort = 'createdAt', order = 'desc', search } = req.query;
+
         // Build query
         const query = { adminId };
         
-        // Add status filter if provided
+        // Filter by status if provided
         if (status) {
             query.status = status;
         }
         
-        // Pagination
+        // Add text search if provided
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } },
+                { brand: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Calculate pagination
         const skip = (parseInt(page) - 1) * parseInt(limit);
-        const sortOrder = order === 'desc' ? -1 : 1;
-        const sortOptions = {};
-        sortOptions[sort] = sortOrder;
         
-        // Get product requests with pagination
+        // Sort order
+        const sortObj = {};
+        sortObj[sort] = order === 'asc' ? 1 : -1;
+
+        // Get total count for pagination
+        const total = await ProductRequest.countDocuments(query);
+        
+        // Get product requests with pagination and sorting
         const productRequests = await ProductRequest.find(query)
-            .sort(sortOptions)
+            .sort(sortObj)
             .skip(skip)
             .limit(parseInt(limit))
-            .populate('catalogId', 'name')
-            .populate('superAdminId', 'first_name last_name')
-            .populate('publishedProductId', 'name status');
-        
-        // Get total count for pagination
-        const totalCount = await ProductRequest.countDocuments(query);
-        
+            .populate('catalogId', 'name');
+
         res.status(200).json({
             success: true,
-            message: "Product requests fetched successfully",
-            data: {
-                productRequests,
-                pagination: {
-                    total: totalCount,
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    pages: Math.ceil(totalCount / parseInt(limit))
-                }
-            }
+            total,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / parseInt(limit)),
+            productRequests
         });
     } catch (error) {
-        console.error("Error getting product requests:", error);
+        console.error("Get admin product requests error:", error);
         res.status(500).json({
             success: false,
-            message: "Internal server error",
+            message: "Error fetching product requests",
             error: error.message
         });
     }
 };
 
 /**
- * Get product request by ID (Admin)
+ * Get a specific product request by ID for an admin
  */
-const getProductRequestById = async (req, res) => {
+exports.getProductRequestById = async (req, res) => {
     try {
-        const { id } = req.params;
         const adminId = req.adminId;
-        
-        // Find product request
-        const productRequest = await ProductRequest.findById(id)
-            .populate('catalogId', 'name')
-            .populate('superAdminId', 'first_name last_name')
-            .populate('publishedProductId', 'name status');
-        
+        const productId = req.params.id;
+
+        // Find the product request
+        const productRequest = await ProductRequest.findOne({
+            _id: productId,
+            adminId: adminId
+        }).populate('catalogId', 'name');
+
         if (!productRequest) {
             return res.status(404).json({
                 success: false,
-                message: "Product request not found"
+                message: "Product request not found or you don't have access to it"
             });
         }
-        
-        // Check if the product request belongs to the admin
-        if (productRequest.adminId.toString() !== adminId) {
-            return res.status(403).json({
-                success: false,
-                message: "You do not have permission to view this product request"
-            });
-        }
-        
+
         res.status(200).json({
             success: true,
-            message: "Product request fetched successfully",
-            data: productRequest
+            productRequest
         });
     } catch (error) {
-        console.error("Error getting product request:", error);
+        console.error("Get product request by ID error:", error);
         res.status(500).json({
             success: false,
-            message: "Internal server error",
+            message: "Error fetching product request",
             error: error.message
         });
     }
 };
 
-/**
- * Update product request (Admin)
- */
-const updateProductRequest = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const adminId = req.adminId;
-        
-        // Find product request
-        const productRequest = await ProductRequest.findById(id);
-        
-        if (!productRequest) {
-            return res.status(404).json({
-                success: false,
-                message: "Product request not found"
-            });
-        }
-        
-        // Check if the product request belongs to the admin
-        if (productRequest.adminId.toString() !== adminId) {
-            return res.status(403).json({
-                success: false,
-                message: "You do not have permission to update this product request"
-            });
-        }
-        
-        // Check if product request can be updated
-        if (!['draft', 'rejected'].includes(productRequest.status)) {
-            return res.status(400).json({
-                success: false,
-                message: `Product request cannot be updated in "${productRequest.status}" status`
-            });
-        }
-        
-        // Extract data from request
-        const { 
-            name, 
-            description, 
-            price, 
-            salePrice,
-            currency,
-            category,
-            subCategory,
-            brand,
-            attributes,
-            inventory,
-            shipping,
-            isDigital,
-            hasVariants,
-            catalogId,
-            adminNotes,
-            taxable,
-            taxClass,
-            taxRate
-        } = req.body;
-        
-        // Validate catalog if provided
-        if (catalogId) {
-            const catalog = await ProductCatalog.findById(catalogId);
-            if (!catalog) {
-                return res.status(404).json({
-                    success: false,
-                    message: "Product catalog not found"
-                });
-            }
-            
-            // Check if the catalog belongs to the admin
-            if (catalog.adminId.toString() !== adminId) {
-                return res.status(403).json({
-                    success: false,
-                    message: "You do not have permission to use this catalog"
-                });
-            }
-        }
-        
-        // Process uploaded files if any
-        let newProductImages = [];
-        if (req.files && Array.isArray(req.files)) {
-            for (const file of req.files) {
-                const fileUpload = new FileUpload({
-                    filename: file.filename || `product_image_${Date.now()}`,
-                    originalFilename: file.originalname,
-                    path: file.path || file.location,
-                    url: file.location || file.path,
-                    mimeType: file.mimetype,
-                    size: file.size,
-                    uploadedBy: {
-                        id: adminId,
-                        role: 'admin'
-                    },
-                    adminId,
-                    entityType: 'product_request',
-                    entityId: productRequest._id,
-                    isPublic: true
-                });
-                
-                await fileUpload.save();
-                newProductImages.push({
-                    url: fileUpload.url,
-                    isPrimary: productRequest.images.length === 0 && newProductImages.length === 0, // Primary if no images exist
-                    caption: productRequest.name
-                });
-            }
-        }
-        
-        // Update fields
-        if (name) productRequest.name = name;
-        if (description !== undefined) productRequest.description = description;
-        if (price) productRequest.price = parseFloat(price);
-        if (salePrice !== undefined) productRequest.salePrice = salePrice ? parseFloat(salePrice) : null;
-        if (currency) productRequest.currency = currency;
-        if (category) productRequest.category = category;
-        if (subCategory !== undefined) productRequest.subCategory = subCategory;
-        if (brand !== undefined) productRequest.brand = brand;
-        if (attributes) productRequest.attributes = attributes;
-        if (inventory) productRequest.inventory = inventory;
-        if (shipping) productRequest.shipping = shipping;
-        if (isDigital !== undefined) productRequest.isDigital = isDigital;
-        if (hasVariants !== undefined) productRequest.hasVariants = hasVariants;
-        if (catalogId) productRequest.catalogId = catalogId;
-        if (adminNotes !== undefined) productRequest.adminNotes = adminNotes;
-        if (taxable !== undefined) productRequest.taxable = taxable;
-        if (taxClass) productRequest.taxClass = taxClass;
-        if (taxRate !== undefined) productRequest.taxRate = parseFloat(taxRate);
-        
-        // Add new images
-        if (newProductImages.length > 0) {
-            productRequest.images = [...productRequest.images, ...newProductImages];
-        }
-        
-        // Set status to submitted if it was rejected
-        if (productRequest.status === 'rejected') {
-            productRequest.status = 'submitted';
-        }
-        
-        await productRequest.save();
-        
-        // Log activity
-        await ActivityLog.create({
-            actorId: adminId,
-            actorModel: 'Admins',
-            action: 'product_request_updated',
-            entityType: 'ProductRequest',
-            entityId: productRequest._id,
-            description: `Product request "${productRequest.name}" was updated by admin`,
-            status: 'success'
-        });
-        
-        // Create notification for Super Admins if request was resubmitted
-        if (productRequest.status === 'submitted') {
-            await Notification.create({
-                title: 'Product Request Resubmitted',
-                description: `Product request "${productRequest.name}" has been resubmitted`,
-                type: 'product_request',
-                forSuperAdmin: true,
-                relatedTo: {
-                    model: 'ProductRequest',
-                    id: productRequest._id
-                },
-                priority: 'medium'
-            });
-        }
-        
-        res.status(200).json({
-            success: true,
-            message: "Product request updated successfully",
-            data: {
-                _id: productRequest._id,
-                name: productRequest.name,
-                price: productRequest.price,
-                status: productRequest.status
-            }
-        });
-    } catch (error) {
-        console.error("Error updating product request:", error);
-        res.status(500).json({
-            success: false,
-            message: "Internal server error",
-            error: error.message
-        });
-    }
-};
+// SuperAdmin methods
 
 /**
- * Delete product request (Admin)
+ * Get all product requests for superadmin
  */
-const deleteProductRequest = async (req, res) => {
+exports.getAllProductRequests = async (req, res) => {
     try {
-        const { id } = req.params;
-        const adminId = req.adminId;
-        
-        // Find product request
-        const productRequest = await ProductRequest.findById(id);
-        
-        if (!productRequest) {
-            return res.status(404).json({
-                success: false,
-                message: "Product request not found"
-            });
-        }
-        
-        // Check if the product request belongs to the admin
-        if (productRequest.adminId.toString() !== adminId) {
-            return res.status(403).json({
-                success: false,
-                message: "You do not have permission to delete this product request"
-            });
-        }
-        
-        // Check if product request can be deleted
-        if (!['draft', 'rejected'].includes(productRequest.status)) {
-            return res.status(400).json({
-                success: false,
-                message: `Product request cannot be deleted in "${productRequest.status}" status`
-            });
-        }
-        
-        // Delete product request
-        await ProductRequest.findByIdAndDelete(id);
-        
-        // Log activity
-        await ActivityLog.create({
-            actorId: adminId,
-            actorModel: 'Admins',
-            action: 'product_request_deleted',
-            entityType: 'ProductRequest',
-            entityId: id,
-            description: `Product request "${productRequest.name}" was deleted by admin`,
-            status: 'success'
-        });
-        
-        res.status(200).json({
-            success: true,
-            message: "Product request deleted successfully"
-        });
-    } catch (error) {
-        console.error("Error deleting product request:", error);
-        res.status(500).json({
-            success: false,
-            message: "Internal server error",
-            error: error.message
-        });
-    }
-};
+        const { status, adminId, page = 1, limit = 10, sort = 'createdAt', order = 'desc', search } = req.query;
 
-/**
- * Super Admin Functions
- */
-
-/**
- * Get all product requests (Super Admin)
- */
-const getAllProductRequests = async (req, res) => {
-    try {
-        const { status, adminId, limit = 20, page = 1, sort = 'createdAt', order = 'desc' } = req.query;
-        
         // Build query
         const query = {};
         
-        // Add status filter if provided
+        // Filter by status if provided
         if (status) {
             query.status = status;
         }
         
-        // Add admin filter if provided
+        // Filter by adminId if provided
         if (adminId) {
             query.adminId = adminId;
         }
         
-        // Pagination
+        // Add text search if provided
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } },
+                { brand: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // Calculate pagination
         const skip = (parseInt(page) - 1) * parseInt(limit);
-        const sortOrder = order === 'desc' ? -1 : 1;
-        const sortOptions = {};
-        sortOptions[sort] = sortOrder;
         
-        // Get product requests with pagination
+        // Sort order
+        const sortObj = {};
+        sortObj[sort] = order === 'asc' ? 1 : -1;
+
+        // Get total count for pagination
+        const total = await ProductRequest.countDocuments(query);
+        
+        // Get product requests with pagination and sorting
         const productRequests = await ProductRequest.find(query)
-            .sort(sortOptions)
+            .sort(sortObj)
             .skip(skip)
             .limit(parseInt(limit))
-            .populate('adminId', 'first_name last_name email_id')
-            .populate('catalogId', 'name')
-            .populate('superAdminId', 'first_name last_name')
-            .populate('publishedProductId', 'name status');
-        
-        // Get total count for pagination
-        const totalCount = await ProductRequest.countDocuments(query);
-        
+            .populate('adminId', 'name email businessName')
+            .populate('catalogId', 'name');
+
         res.status(200).json({
             success: true,
-            message: "Product requests fetched successfully",
-            data: {
-                productRequests,
-                pagination: {
-                    total: totalCount,
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    pages: Math.ceil(totalCount / parseInt(limit))
-                }
-            }
+            total,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / parseInt(limit)),
+            productRequests
         });
     } catch (error) {
-        console.error("Error getting product requests:", error);
+        console.error("Get all product requests error:", error);
         res.status(500).json({
             success: false,
-            message: "Internal server error",
+            message: "Error fetching product requests",
             error: error.message
         });
     }
 };
 
 /**
- * Get product request by ID (Super Admin)
+ * Get a specific product request by ID for superadmin
  */
-const getSuperAdminProductRequestById = async (req, res) => {
+exports.getSuperAdminProductRequestById = async (req, res) => {
     try {
-        const { id } = req.params;
-        
-        // Find product request
-        const productRequest = await ProductRequest.findById(id)
-            .populate('adminId', 'first_name last_name email_id')
+        const productId = req.params.id;
+
+        // Find the product request
+        const productRequest = await ProductRequest.findById(productId)
+            .populate('adminId', 'name email businessName')
             .populate('catalogId', 'name')
-            .populate('superAdminId', 'first_name last_name')
-            .populate('publishedProductId', 'name status');
-        
+            .populate('superAdminId', 'name email');
+
         if (!productRequest) {
             return res.status(404).json({
                 success: false,
                 message: "Product request not found"
             });
         }
-        
+
         res.status(200).json({
             success: true,
-            message: "Product request fetched successfully",
-            data: productRequest
+            productRequest
         });
     } catch (error) {
-        console.error("Error getting product request:", error);
+        console.error("Get product request by ID error:", error);
         res.status(500).json({
             success: false,
-            message: "Internal server error",
+            message: "Error fetching product request",
             error: error.message
         });
     }
 };
 
 /**
- * Review product request (Super Admin)
+ * Review a product request (approve/reject) by superadmin
  */
-const reviewProductRequest = async (req, res) => {
+exports.reviewProductRequest = async (req, res) => {
     try {
-        const { id } = req.params;
         const superAdminId = req.superAdminId;
+        const productId = req.params.id;
         const { status, superAdminNotes } = req.body;
-        
+
         // Validate status
-        if (!['approved', 'rejected', 'under_review'].includes(status)) {
+        if (!status || !['approved', 'rejected'].includes(status)) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid status. Must be 'approved', 'rejected', or 'under_review'"
+                message: "Invalid status. Status must be 'approved' or 'rejected'"
             });
         }
-        
-        // Find product request
-        const productRequest = await ProductRequest.findById(id);
-        
+
+        // Find the product request
+        const productRequest = await ProductRequest.findById(productId);
+
         if (!productRequest) {
             return res.status(404).json({
                 success: false,
                 message: "Product request not found"
             });
         }
-        
-        // Check if product request is in a state that can be reviewed
-        if (!['submitted', 'under_review'].includes(productRequest.status)) {
+
+        // Check if product is in a reviewable state
+        if (productRequest.status !== 'submitted' && productRequest.status !== 'under_review') {
             return res.status(400).json({
                 success: false,
-                message: `Product request cannot be reviewed in "${productRequest.status}" status`
+                message: `Cannot review product in ${productRequest.status} status. Product must be in 'submitted' or 'under_review' status`
             });
         }
-        
-        // Require notes for rejection
-        if (status === 'rejected' && !superAdminNotes) {
-            return res.status(400).json({
-                success: false,
-                message: "Notes are required when rejecting a product request"
-            });
-        }
-        
+
         // Update product request
         productRequest.status = status;
         productRequest.superAdminId = superAdminId;
+        productRequest.superAdminNotes = superAdminNotes || null;
         productRequest.reviewedAt = new Date();
         
-        if (superAdminNotes !== undefined) {
-            productRequest.superAdminNotes = superAdminNotes;
+        // If status is rejected, add rejection reason
+        if (status === 'rejected') {
+            productRequest.rejectionReason = req.body.rejectionReason || 'Product request was rejected';
         }
-        
+
+        // Save updates
         await productRequest.save();
-        
-        // Get admin details for notification
-        const admin = await Admin.findById(productRequest.adminId);
-        
-        // Create notification for admin
-        await Notification.create({
-            title: `Product Request ${status === 'approved' ? 'Approved' : status === 'rejected' ? 'Rejected' : 'Under Review'}`,
-            description: `Your product request "${productRequest.name}" has been ${status === 'approved' ? 'approved' : status === 'rejected' ? 'rejected' : 'placed under review'}`,
-            type: 'product_request',
-            forAdmin: productRequest.adminId,
-            relatedTo: {
-                model: 'ProductRequest',
-                id: productRequest._id
-            },
-            priority: 'high'
-        });
-        
-        // Log activity
-        await ActivityLog.create({
-            actorId: superAdminId,
-            actorModel: 'SuperAdmins',
-            action: `product_request_${status}`,
-            entityType: 'ProductRequest',
-            entityId: productRequest._id,
-            description: `Product request "${productRequest.name}" was ${status} by super admin`,
-            status: 'success'
-        });
-        
+
         res.status(200).json({
             success: true,
             message: `Product request ${status} successfully`,
-            data: {
-                _id: productRequest._id,
-                name: productRequest.name,
-                status: productRequest.status
-            }
+            productRequest
         });
     } catch (error) {
-        console.error("Error reviewing product request:", error);
+        console.error("Review product request error:", error);
         res.status(500).json({
             success: false,
-            message: "Internal server error",
+            message: "Error reviewing product request",
             error: error.message
         });
     }
 };
 
 /**
- * Publish product (Super Admin)
+ * Publish an approved product to the catalog
  */
-const publishProduct = async (req, res) => {
+exports.publishProduct = async (req, res) => {
     try {
-        const { id } = req.params;
         const superAdminId = req.superAdminId;
-        const { 
-            facebookRetailerId, 
-            catalogId
-        } = req.body;
-        
-        // Validate required fields
-        if (!facebookRetailerId || !catalogId) {
-            return res.status(400).json({
-                success: false,
-                message: "Facebook retailer ID and catalog ID are required"
-            });
-        }
-        
-        // Find product request
-        const productRequest = await ProductRequest.findById(id);
-        
+        const productId = req.params.id;
+
+        // Find the product request
+        const productRequest = await ProductRequest.findById(productId);
+
         if (!productRequest) {
             return res.status(404).json({
                 success: false,
                 message: "Product request not found"
             });
         }
-        
-        // Check if product request is approved
+
+        // Check if product is approved and not already published
         if (productRequest.status !== 'approved') {
             return res.status(400).json({
                 success: false,
-                message: "Only approved product requests can be published"
+                message: "Only approved products can be published"
             });
         }
-        
-        // Verify catalog exists
-        const catalog = await ProductCatalog.findById(catalogId);
-        if (!catalog) {
-            return res.status(404).json({
+
+        // Check if catalog exists
+        if (!productRequest.catalogId) {
+            return res.status(400).json({
                 success: false,
-                message: "Product catalog not found"
+                message: "Product must be associated with a catalog to be published"
             });
         }
-        
-        // Create product
+
+        // Create new product in Products collection
         const product = new Product({
             name: productRequest.name,
             description: productRequest.description,
-            adminId: productRequest.adminId,
             price: productRequest.price,
-            categoryId: productRequest.category,
-            catalogId: catalogId,
-            facebookProductId: facebookRetailerId,
-            status: 'active',
+            salePrice: productRequest.salePrice,
+            currency: productRequest.currency,
+            category: productRequest.category,
+            subCategory: productRequest.subCategory,
+            brand: productRequest.brand,
             images: productRequest.images,
-            productDetails: {
-                brand: productRequest.brand,
-                subCategory: productRequest.subCategory,
-                attributes: productRequest.attributes,
-                isDigital: productRequest.isDigital,
-                hasVariants: productRequest.hasVariants,
-                inventory: productRequest.inventory,
-                shipping: productRequest.shipping,
-                taxable: productRequest.taxable,
-                taxClass: productRequest.taxClass,
-                taxRate: productRequest.taxRate
-            }
+            attributes: productRequest.attributes,
+            inventory: productRequest.inventory,
+            shipping: productRequest.shipping,
+            isDigital: productRequest.isDigital,
+            hasVariants: productRequest.hasVariants,
+            status: 'active',
+            catalogId: productRequest.catalogId,
+            adminId: productRequest.adminId,
+            superAdminId: superAdminId,
+            productRequestId: productRequest._id,
+            taxable: productRequest.taxable,
+            taxClass: productRequest.taxClass,
+            taxRate: productRequest.taxRate
         });
-        
+
+        // Save the new product
         await product.save();
-        
-        // Update product request
+
+        // Update the product request status and reference to published product
         productRequest.status = 'published';
         productRequest.publishedAt = new Date();
         productRequest.publishedProductId = product._id;
-        productRequest.facebookRetailerId = facebookRetailerId;
-        
         await productRequest.save();
-        
-        // Update catalog's product count
-        catalog.productCount = (catalog.productCount || 0) + 1;
-        await catalog.save();
-        
-        // Get admin details for notification
-        const admin = await Admin.findById(productRequest.adminId);
-        
-        // Create notification for admin
-        await Notification.create({
-            title: 'Product Published',
-            description: `Your product "${productRequest.name}" has been published and is now active`,
-            type: 'product_published',
-            forAdmin: productRequest.adminId,
-            relatedTo: {
-                model: 'Product',
-                id: product._id
-            },
-            priority: 'high'
-        });
-        
-        // Log activity
-        await ActivityLog.create({
-            actorId: superAdminId,
-            actorModel: 'SuperAdmins',
-            action: 'product_published',
-            entityType: 'Product',
-            entityId: product._id,
-            description: `Product "${product.name}" was published by super admin`,
-            status: 'success'
-        });
-        
+
+        // Update product count in catalog
+        await ProductCatalog.findByIdAndUpdate(
+            productRequest.catalogId,
+            { $inc: { productCount: 1 } }
+        );
+
         res.status(200).json({
             success: true,
             message: "Product published successfully",
-            data: {
-                productRequest: {
-                    _id: productRequest._id,
-                    name: productRequest.name,
-                    status: productRequest.status
-                },
-                product: {
-                    _id: product._id,
-                    name: product.name,
-                    facebookRetailerId: product.facebookProductId,
-                    status: product.status
-                }
-            }
+            product,
+            productRequest
         });
     } catch (error) {
-        console.error("Error publishing product:", error);
+        console.error("Publish product error:", error);
         res.status(500).json({
             success: false,
-            message: "Internal server error",
+            message: "Error publishing product",
             error: error.message
         });
     }
-};
-
-module.exports = {
-    // Admin endpoints
-    createProductRequest,
-    getAdminProductRequests,
-    getProductRequestById,
-    updateProductRequest,
-    deleteProductRequest,
-    
-    // Super Admin endpoints
-    getAllProductRequests,
-    getSuperAdminProductRequestById,
-    reviewProductRequest,
-    publishProduct
 };

@@ -10,51 +10,6 @@ const mongoSanitize = require('express-mongo-sanitize');
 const morgan = require('morgan');
 const path = require('path');
 
-// Initialize Firebase Admin (required for file uploads)
-const admin = require('firebase-admin');
-
-// Check if Firebase is already initialized
-if (!admin.apps.length) {
-    console.log('Initializing Firebase Admin SDK...');
-    try {
-        // Verify environment variables are loaded
-        if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_CLIENT_EMAIL || !process.env.FIREBASE_PRIVATE_KEY) {
-            console.error('Firebase environment variables are missing!');
-            console.log('Available env vars:', Object.keys(process.env).filter(key => key.includes('FIREBASE')));
-            
-            // For development only - use hardcoded values as fallback
-            if (process.env.NODE_ENV !== 'production') {
-                console.warn('Using hardcoded Firebase config for development');
-                admin.initializeApp({
-                    credential: admin.credential.cert({
-                        projectId: "pixe-whatsapp",
-                        clientEmail: "firebase-adminsdk-pp3or@pixe-whatsapp.iam.gserviceaccount.com",
-                        privateKey: "-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY_HERE\n-----END PRIVATE KEY-----\n"
-                    }),
-                    storageBucket: "pixe-whatsapp.appspot.com"
-                });
-            } else {
-                throw new Error('Firebase configuration is required in production');
-            }
-        } else {
-            // Initialize with environment variables
-            admin.initializeApp({
-                credential: admin.credential.cert({
-                    projectId: process.env.FIREBASE_PROJECT_ID,
-                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
-                }),
-                storageBucket: process.env.FIREBASE_STORAGE_BUCKET
-            });
-            console.log('Firebase initialized successfully with env vars');
-            console.log('Using storage bucket:', process.env.FIREBASE_STORAGE_BUCKET);
-        }
-    } catch (error) {
-        console.error('Firebase initialization error:', error);
-    }
-}
-
-module.exports = { admin };
 const app = express();
 // Set up static file serving
 app.use(express.static(path.join(__dirname, 'public')));

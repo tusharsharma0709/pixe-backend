@@ -2,14 +2,19 @@
 const express = require('express');
 const router = express.Router();
 const { adminAuth, superAdminAuth } = require('../middlewares/auth');
-const upload = require('../middlewares/multer');
+const userTypeMiddleware = require('../middlewares/userTypeMiddlewares');
+const multer = require('../middlewares/multer');
 const productRequestController = require('../controllers/productRequestControllers');
 
-// Admin routes
+// Configure multer for product image uploads
+const productImagesUpload = multer.array('images', 10); // Allow up to 10 product images
+
+// Admin routes for product requests
 router.post(
     '/', 
     adminAuth, 
-    upload.uploadMultiple, // Allow up to 10 product images
+    userTypeMiddleware, // Add this middleware for consistency
+    productImagesUpload,
     productRequestController.createProductRequest
 );
 
@@ -28,7 +33,8 @@ router.get(
 router.put(
     '/:id',
     adminAuth,
-    upload.uploadMultiple,
+    userTypeMiddleware,
+    productImagesUpload,
     productRequestController.updateProductRequest
 );
 
