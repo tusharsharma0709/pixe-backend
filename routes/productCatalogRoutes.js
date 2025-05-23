@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const ProductCatalogController = require('../controllers/productCatalogControllers');
-const { adminAuth, superAdminAuth } = require('../middlewares/auth');
+const { adminAuth, superAdminAuth, adminOrSuperAdminAuth } = require('../middlewares/auth');
 
 // Admin routes (requires admin authentication)
 // Create a new product catalog
@@ -35,17 +35,6 @@ router.get('/:id', (req, res, next) => {
 }, ProductCatalogController.getCatalog);
 
 // Update catalog - this endpoint will check permissions inside the controller
-router.patch('/:id', (req, res, next) => {
-    // First try admin auth, if it fails, try superadmin auth
-    adminAuth(req, res, (err) => {
-        if (err) {
-            // If admin auth fails, try superadmin auth
-            superAdminAuth(req, res, next);
-        } else {
-            // Admin auth succeeded
-            next();
-        }
-    });
-}, ProductCatalogController.updateCatalog);
+router.patch('/:id', adminOrSuperAdminAuth, ProductCatalogController.updateCatalog);
 
 module.exports = router;

@@ -17,7 +17,7 @@ const superAdminAuth = async (req, res, next) => {
     const token = authHeader.split(" ")[1];
 
     // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET); // Use process.env.JWT_SECRET instead of JWT_SECRET
+    const decoded = jwt.verify(token, JWT_SECRET); // Use process.env.JWT_SECRET instead of JWT_SECRET
     
     // Check for superAdminId in decoded token (not adminId)
     if (!decoded || !decoded.superAdminId) { // Changed from adminId to superAdminId
@@ -96,7 +96,7 @@ const userAuth = async (req, res, next) => {
 
   try {
       // Verify the token
-      const decoded = jwt.verify(token, process.env.JWT_SECRET); // Ensure the secret key is correct
+      const decoded = jwt.verify(token, JWT_SECRET); // Ensure the secret key is correct
 
       // Check if the token exists in the UserToken collection
       const userToken = await UserToken.findOne({ token });
@@ -252,10 +252,70 @@ const adminOrAgentAuth = async (req, res, next) => {
   }
 };
 
+const adminOrSuperAdminAuth = async (req, res, next) => {
+  try {
+      const authHeader = req.headers.authorization;
+
+      // Check for token in header
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+          return res.status(401).json({ success: false, message: "Authorization token missing" });
+      }
+
+      const token = authHeader.split(" ")[1];
+
+      try {
+          // Verify token
+          const decoded = jwt.verify(token, process.env.JWT_SECRET);
+          
+          // Check if it's an admin token
+          if (decoded.adminId) {
+              const tokenExists = await AdminTokens.findOne({
+                  adminId: decoded.adminId,
+                  token,
+                  tokenType: "login",
+              });
+
+              if (tokenExists) {
+                  req.adminId = decoded.adminId;
+                  return next();
+              }
+          }
+
+          // Check if it's a superadmin token
+          if (decoded.superAdminId) {
+              const tokenExists = await SuperAdminTokens.findOne({
+                  superAdminId: decoded.superAdminId,
+                  token,
+                  tokenType: "login",
+              });
+
+              if (tokenExists) {
+                  req.superAdminId = decoded.superAdminId;
+                  return next();
+              }
+          }
+
+          // If we reach here, token is invalid for both roles
+          return res.status(401).json({ success: false, message: "Invalid token" });
+
+      } catch (jwtError) {
+          return res.status(401).json({ success: false, message: "Invalid token" });
+      }
+
+  } catch (error) {
+      return res.status(401).json({
+          success: false,
+          message: "Authentication failed",
+          error: error.message,
+      });
+  }
+};
+
 module.exports = {
-    superAdminAuth,
-    adminAuth,
-    userAuth,
-    agentAuth,
-    adminOrAgentAuth
+  superAdminAuth,
+  adminAuth,
+  userAuth,
+  agentAuth,
+  adminOrAgentAuth,
+  adminOrSuperAdminAuth  // Add this new middleware
 };
