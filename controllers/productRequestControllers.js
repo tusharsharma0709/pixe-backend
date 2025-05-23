@@ -8,6 +8,9 @@ const crypto = require('crypto');
 const path = require('path');
 const mongoose = require('mongoose');
 
+const fs = require('fs').promises;
+const os = require('os');
+
 /**
  * Create a new product request with images uploaded to Firebase
  */
@@ -15,7 +18,20 @@ exports.createProductRequest = async (req, res) => {
     try {
         const adminId = req.adminId;
         const productData = req.body;
-        const files = req.files; // Multer places uploaded files here
+
+        // Debug info for uploaded files
+        if (req.files && req.files.length > 0) {
+            req.files.forEach((file, index) => {
+                console.log(`File ${index + 1}:`, {
+                    originalname: file.originalname,
+                    mimetype: file.mimetype,
+                    size: file.size,
+                    buffer: file.buffer ? 'Buffer present' : 'No buffer'
+                });
+            });
+        } else {
+            console.log('No files received with request');
+        }
 
         // Validate required fields
         if (!productData.name || !productData.price) {
@@ -40,88 +56,109 @@ exports.createProductRequest = async (req, res) => {
             }
         }
 
-        // Process uploaded images with Firebase
+        // Process uploaded files - USING bucket.upload() method to avoid stream issues
         let productImages = [];
-        if (files && Array.isArray(files) && files.length > 0) {
+        if (req.files && Array.isArray(req.files) && req.files.length > 0) {
             try {
                 // Get Firebase Storage bucket
                 const bucket = getBucket();
                 console.log(`Got Firebase bucket: ${bucket.name}`);
                 
-                for (let i = 0; i < files.length; i++) {
-                    const file = files[i];
-                    
-                    // Generate unique filename
-                    const fileExt = path.extname(file.originalname);
-                    const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
-                    
-                    // Create folder structure by date: yyyy/mm/
-                    const currentDate = new Date();
-                    const year = currentDate.getFullYear();
-                    const month = currentDate.getMonth() + 1;
-                    
-                    // Create a path in Firebase Storage
-                    const filePath = `uploads/products/${year}/${month}/${filename}`;
-                    
-                    // Upload to Firebase
-                    console.log(`Uploading product image to Firebase: ${filePath}`);
-                    const fileRef = bucket.file(filePath);
-                    await fileRef.save(file.buffer, {
-                        metadata: {
-                            contentType: file.mimetype,
-                            originalName: file.originalname
-                        },
-                        public: true,
-                        resumable: false
-                    });
-                    
-                    // Get public URL
-                    const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
-                    console.log(`Product image uploaded to Firebase: ${fileUrl}`);
-                    
-                    // Create file upload record
-                    const fileUpload = await FileUpload.create({
-                        filename,
-                        originalFilename: file.originalname,
-                        path: filePath,
-                        url: fileUrl,
-                        mimeType: file.mimetype,
-                        size: file.size,
-                        uploadedBy: {
-                            id: adminId,
-                            role: 'admin'
-                        },
-                        adminId,
-                        entityType: 'product',
-                        status: 'permanent',
-                        isPublic: true,
-                        bucket: bucket.name,
-                        storageProvider: 'google_cloud',
-                        storageMetadata: {
-                            firebasePath: filePath
+                for (const file of req.files) {
+                    try {
+                        // Generate unique filename
+                        const fileExt = path.extname(file.originalname);
+                        const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
+                        
+                        // Create folder structure by date: yyyy/mm/
+                        const currentDate = new Date();
+                        const year = currentDate.getFullYear();
+                        const month = currentDate.getMonth() + 1;
+                        
+                        const filePath = `uploads/products/${year}/${month}/${filename}`;
+                        
+                        console.log(`Uploading product image to Firebase: ${filePath}`);
+                        
+                        // DIFFERENT APPROACH: Write to temp file first, then upload
+                        const tempFilePath = path.join(os.tmpdir(), filename);
+                        await fs.writeFile(tempFilePath, file.buffer);
+                        
+                        // Upload using bucket.upload() method instead of fileRef.save()
+                        const [uploadedFile] = await bucket.upload(tempFilePath, {
+                            destination: filePath,
+                            metadata: {
+                                contentType: file.mimetype,
+                                metadata: {
+                                    originalName: file.originalname,
+                                    uploadedBy: adminId
+                                }
+                            },
+                            public: true
+                        });
+                        
+                        // Clean up temp file
+                        try {
+                            await fs.unlink(tempFilePath);
+                        } catch (unlinkError) {
+                            console.log('Could not delete temp file:', unlinkError.message);
                         }
-                    });
-                    
-                    // Add to product images array
-                    productImages.push({
-                        url: fileUrl,
-                        isPrimary: i === 0, // First image is primary by default
-                        caption: productData.imageCaptions && productData.imageCaptions[i] 
-                          ? productData.imageCaptions[i] 
-                          : null
-                    });
+                        
+                        // Get public URL
+                        const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+                        
+                        console.log(`File uploaded successfully to Firebase: ${fileUrl}`);
+                        
+                        // Create file upload record
+                        const fileUpload = await FileUpload.create({
+                            filename,
+                            originalFilename: file.originalname,
+                            path: filePath,
+                            url: fileUrl,
+                            mimeType: file.mimetype,
+                            size: file.size,
+                            uploadedBy: {
+                                id: adminId,
+                                role: 'admin'
+                            },
+                            adminId,
+                            entityType: 'product',
+                            status: 'permanent',
+                            isPublic: true,
+                            bucket: bucket.name,
+                            storageProvider: 'google_cloud',
+                            storageMetadata: {
+                                firebasePath: filePath
+                            }
+                        });
+                        
+                        productImages.push({
+                            url: fileUrl,
+                            isPrimary: productImages.length === 0,
+                            caption: productData.imageCaptions && productData.imageCaptions[productImages.length] 
+                              ? productData.imageCaptions[productImages.length] 
+                              : null
+                        });
+                        
+                    } catch (fileError) {
+                        console.error("Error uploading file to Firebase:", fileError);
+                        // Continue with other files
+                    }
                 }
-            } catch (firebaseError) {
-                console.error("Error uploading product images to Firebase:", firebaseError);
+            } catch (storageError) {
+                console.error("Error with Firebase storage:", storageError);
                 return res.status(500).json({
                     success: false,
-                    message: "Error uploading product images",
-                    error: firebaseError.message
+                    message: "Error uploading files to storage",
+                    error: storageError.message
                 });
             }
+        } else {
+            console.log('No files to process');
         }
 
-        // Create the product request with images
+        console.log(`Successfully processed ${productImages.length} out of ${req.files ? req.files.length : 0} files`);
+
+        // Create the product request
         const productRequest = new ProductRequest({
             adminId,
             name: productData.name,
@@ -134,24 +171,20 @@ exports.createProductRequest = async (req, res) => {
             brand: productData.brand || null,
             images: productImages,
             attributes: (() => {
-                if (!productData.attributes) return [];
+                const attributesArray = [];
+                let index = 0;
                 
-                // If it's already an object/array, return it directly
-                if (typeof productData.attributes === 'object') {
-                    return productData.attributes;
-                }
-                
-                // If it's a string, try to parse it
-                if (typeof productData.attributes === 'string') {
-                    try {
-                        return JSON.parse(productData.attributes);
-                    } catch (parseError) {
-                        console.warn('Failed to parse attributes:', parseError);
-                        return [];
+                while (productData[`attributes[${index}][name]`] !== undefined) {
+                    const name = productData[`attributes[${index}][name]`];
+                    const value = productData[`attributes[${index}][value]`];
+                    
+                    if (name && value) {
+                        attributesArray.push({ name, value });
                     }
+                    index++;
                 }
                 
-                return [];
+                return attributesArray.length > 0 ? attributesArray : [];
             })(),
             inventory: {
                 quantity: productData.quantity ? parseInt(productData.quantity) : 0,
@@ -179,16 +212,43 @@ exports.createProductRequest = async (req, res) => {
             taxRate: productData.taxRate ? parseFloat(productData.taxRate) : null
         });
 
-        // Save the product request
         await productRequest.save();
+
+        // Update file uploads with the product request ID
+        if (productImages.length > 0) {
+            const uploadedFiles = await FileUpload.find({
+                adminId: adminId,
+                entityType: 'product',
+                url: { $in: productImages.map(img => img.url) }
+            });
+            
+            if (uploadedFiles.length > 0) {
+                await FileUpload.updateMany(
+                    { _id: { $in: uploadedFiles.map(file => file._id) } },
+                    { $set: { entityId: productRequest._id } }
+                );
+            }
+        }
 
         res.status(201).json({
             success: true,
             message: "Product request created successfully",
-            productRequest
+            data: {
+                _id: productRequest._id,
+                name: productRequest.name,
+                status: productRequest.status,
+                createdAt: productRequest.createdAt,
+                images: productImages
+            },
+            uploadStats: {
+                totalFiles: req.files ? req.files.length : 0,
+                successfulUploads: productImages.length,
+                failedUploads: req.files ? req.files.length - productImages.length : 0
+            }
         });
+        
     } catch (error) {
-        console.error("Create product request error:", error);
+        console.error("Error creating product request:", error);
         res.status(500).json({
             success: false,
             message: "Error creating product request",

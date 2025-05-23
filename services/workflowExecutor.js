@@ -1,4 +1,4 @@
-// services/workflowExecutor.js - Updated with Enhanced KYC Verification Nodes and Template Processing
+// services/workflowExecutor.js - Updated to use unified tracking service
 
 const { Message } = require('../models/Messages');
 const { Workflow } = require('../models/Workflows');
@@ -8,8 +8,9 @@ const { Verification } = require('../models/Verifications');
 const whatsappService = require('./whatsappServices');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
-// Add import for GTM service - only new line at the top
-const kycGtmService = require('./kycGtmServices');
+
+// UNIFIED: Import the single unified tracking service instead of multiple services
+const unifiedGtmService = require('./gtmTrackingServices');
 
 // Store recently processed message IDs to prevent duplicate processing
 const recentProcessedMessages = new Map();
@@ -17,12 +18,11 @@ const recentProcessedMessages = new Map();
 // Track node execution counts to prevent infinite loops
 const nodeExecutionCounts = new Map();
 
-// Helper functions defined first
+// Helper functions remain the same...
 function incrementNodeExecutionCount(key) {
     const count = nodeExecutionCounts.get(key) || 0;
     nodeExecutionCounts.set(key, count + 1);
     
-    // Auto cleanup - remove counts older than 1 hour
     setTimeout(() => {
         nodeExecutionCounts.delete(key);
     }, 3600000);
@@ -36,19 +36,18 @@ function resetNodeExecutionCount(sessionId, nodeId) {
 }
 
 function evaluateCondition(condition, data) {
+    // ... same implementation as before
     try {
         if (!condition) return false;
         
-        // Safety check for data
         if (!data) {
             console.error('❌ No data provided for condition evaluation');
             return false;
         }
         
-        // Debug condition evaluation
         console.log(`  Evaluating: "${condition}" with data:`, data);
         
-        // Check for length conditions like string.length == 12
+        // Length conditions
         const lengthRegex = /(\w+)\.replace\([^)]+\)\.length\s*(==|!=|>|<|>=|<=)\s*(\d+)/;
         const lengthMatch = condition.match(lengthRegex);
         
@@ -60,13 +59,10 @@ function evaluateCondition(condition, data) {
                 return false;
             }
             
-            // If field exists, apply the replace operation mentioned in the condition
-            // This is a simplified implementation - in real code you'd use a safer approach
-            fieldValue = String(fieldValue).replace(/\s+/g, '');  // Assuming replace(/\s+/g, '')
+            fieldValue = String(fieldValue).replace(/\s+/g, '');
             const actualLength = fieldValue.length;
             const expectedLengthNum = parseInt(expectedLength);
             
-            // Compare lengths based on operator
             switch (operator) {
                 case '==': return actualLength === expectedLengthNum;
                 case '!=': return actualLength !== expectedLengthNum;
@@ -78,16 +74,15 @@ function evaluateCondition(condition, data) {
             }
         }
         
-        // Check for boolean values directly
+        // Boolean values
         if (condition === 'true') return true;
         if (condition === 'false') return false;
         
-        // Check if we're testing a direct boolean property
         if (data[condition] !== undefined) {
             return Boolean(data[condition]);
         }
         
-        // Check for direct comparison operators
+        // Comparison operators
         const compareRegex = /(\w+)\s*(>|<|>=|<=|==|!=)\s*([\w"']+)/;
         const compareMatch = condition.match(compareRegex);
         
@@ -95,10 +90,8 @@ function evaluateCondition(condition, data) {
             const [, field, operator, valueStr] = compareMatch;
             const fieldValue = data[field];
             
-            // Handle different value types
             let value;
             if (valueStr.startsWith('"') || valueStr.startsWith("'")) {
-                // It's a string, remove quotes
                 value = valueStr.substring(1, valueStr.length - 1);
             } else if (valueStr === 'true') {
                 value = true;
@@ -107,11 +100,9 @@ function evaluateCondition(condition, data) {
             } else if (!isNaN(Number(valueStr))) {
                 value = Number(valueStr);
             } else {
-                // It might be another field reference
                 value = data[valueStr];
             }
             
-            // Debug comparison
             console.log(`  Comparing: ${field} (${fieldValue}) ${operator} ${value}`);
             
             switch (operator) {
@@ -119,8 +110,8 @@ function evaluateCondition(condition, data) {
                 case '<': return fieldValue < value;
                 case '>=': return fieldValue >= value;
                 case '<=': return fieldValue <= value;
-                case '==': return fieldValue == value; // Use loose equality
-                case '!=': return fieldValue != value; // Use loose inequality
+                case '==': return fieldValue == value;
+                case '!=': return fieldValue != value;
                 default: return false;
             }
         }
@@ -132,19 +123,13 @@ function evaluateCondition(condition, data) {
     }
 }
 
-/**
- * Process template expressions in content
- * @param {String} content - Template content with expressions
- * @param {Object} data - Data object with values for replacement
- * @returns {String} - Processed content with evaluated expressions
- */
 function processTemplate(content, data) {
+    // ... same implementation as before
     if (!content || !data) return content;
     
     try {
         let processedContent = content;
         
-        // First, replace simple variables with {{ variable }}
         for (const [key, value] of Object.entries(data)) {
             if (value !== undefined && value !== null) {
                 const regex = new RegExp(`{{\\s*${key}\\s*}}`, 'g');
@@ -152,7 +137,6 @@ function processTemplate(content, data) {
             }
         }
         
-        // Then, process conditional expressions with {{ condition ? 'trueValue' : 'falseValue' }}
         const conditionalRegex = /{{([^{}]+)\s*\?\s*['"]([^'"]+)['"]\s*:\s*['"]([^'"]+)['"]}}|{{([^{}]+)\s*\?\s*['"]([^'"]+)['"]\s*:\s*['"]([^'"]+)['"]}}/g;
         
         processedContent = processedContent.replace(conditionalRegex, (match, cond1, trueVal1, falseVal1, cond2, trueVal2, falseVal2) => {
@@ -161,15 +145,12 @@ function processTemplate(content, data) {
             const falseValue = falseVal1 || falseVal2;
             
             try {
-                // Try to evaluate the condition based on the data object
                 const condTrimmed = condition.trim();
                 
-                // Check if condition is just a variable name
                 if (data[condTrimmed] !== undefined) {
                     return data[condTrimmed] ? trueValue : falseValue;
                 }
                 
-                // Otherwise, try to evaluate the condition
                 if (evaluateCondition(condTrimmed, data)) {
                     return trueValue;
                 } else {
@@ -177,14 +158,14 @@ function processTemplate(content, data) {
                 }
             } catch (error) {
                 console.error(`Error evaluating template condition "${condition}":`, error);
-                return match; // Return the original expression if evaluation fails
+                return match;
             }
         });
         
         return processedContent;
     } catch (error) {
         console.error('Error processing template:', error);
-        return content; // Return original content on error
+        return content;
     }
 }
 
@@ -207,14 +188,10 @@ function generateSessionToken(session) {
 
 /**
  * Process user input for a workflow
- * @param {Object} session - The user session
- * @param {String} input - The user input message
- * @param {String} messageId - Optional WhatsApp message ID for deduplication
- * @param {String} messageType - Type of message (text, interactive, etc.)
  */
 async function processWorkflowInput(session, input, messageId = null, messageType = 'text') {
     try {
-        // Check for duplicate message processing if messageId is provided
+        // Check for duplicate message processing
         if (messageId) {
             const key = `${session._id}:${messageId}`;
             if (recentProcessedMessages.has(key)) {
@@ -222,10 +199,8 @@ async function processWorkflowInput(session, input, messageId = null, messageTyp
                 return;
             }
             
-            // Add to processed messages
             recentProcessedMessages.set(key, Date.now());
             
-            // Cleanup old entries (keep for 1 hour)
             const now = Date.now();
             for (const [key, timestamp] of recentProcessedMessages.entries()) {
                 if (now - timestamp > 3600000) { // 1 hour
@@ -263,7 +238,6 @@ async function processWorkflowInput(session, input, messageId = null, messageTyp
         
         // Handle different types of inputs based on node type
         if (currentNode.type === 'input' || currentNode.type === 'interactive') {
-            // Store user input in session data
             const variableName = currentNode.variableName;
             if (!variableName) {
                 console.error('❌ No variable name defined for node');
@@ -275,34 +249,38 @@ async function processWorkflowInput(session, input, messageId = null, messageTyp
             session.markModified('data');
             console.log(`✅ Stored input in '${variableName}': "${input}"`);
             
-            // If this node has a next node, execute it
+            // UNIFIED: Track user input with unified service
+            try {
+                await unifiedGtmService.trackUserInput(
+                    session, 
+                    variableName, 
+                    input, 
+                    currentNode.nodeId, 
+                    currentNode.name
+                );
+            } catch (trackingError) {
+                console.error('Unified GTM tracking error for user input:', trackingError);
+                // Non-blocking - continue despite tracking errors
+            }
+            
+            // Continue with next node
             if (currentNode.nextNodeId) {
                 console.log(`⏭️ Moving to next node: ${currentNode.nextNodeId}`);
                 
-                // First save the session with the input
                 await session.save();
-                
-                // Reset the execution count for the next node to prevent false positives
                 resetNodeExecutionCount(session._id, currentNode.nextNodeId);
-                
-                // Add a small delay to prevent race conditions
                 await new Promise(resolve => setTimeout(resolve, 500));
-                
-                // Then execute the next node
                 await executeWorkflowNode(session, currentNode.nextNodeId);
             } else {
                 console.error(`❌ No next node defined for node ${currentNode.nodeId}`);
-                // Just save the session
                 await session.save();
             }
         } else {
             console.log(`⚠️ Current node is not an input or interactive node. Type: ${currentNode.type}`);
-            // Just save the session
             await session.save();
         }
     } catch (error) {
         console.error(`❌ Error processing workflow input:`, error);
-        // Try to save the session despite error
         try {
             await session.save();
         } catch (saveError) {
@@ -312,11 +290,11 @@ async function processWorkflowInput(session, input, messageId = null, messageTyp
 }
 
 /**
- * Execute a workflow node
- * @param {Object} session - The user session
- * @param {String} nodeId - The node ID to execute
+ * Execute a workflow node with unified tracking
  */
 async function executeWorkflowNode(session, nodeId) {
+    const startTime = Date.now(); // Track execution time
+    
     try {
         console.log(`\n🔄 Executing workflow node for session ${session._id}`);
         console.log(`  Node ID: ${nodeId}`);
@@ -325,7 +303,6 @@ async function executeWorkflowNode(session, nodeId) {
         const sessionNodeKey = `${session._id}:${nodeId}`;
         const executionCount = incrementNodeExecutionCount(sessionNodeKey);
         
-        // If a node has been executed too many times (potential loop), stop execution
         const MAX_NODE_EXECUTIONS = 5;
         if (executionCount > MAX_NODE_EXECUTIONS) {
             console.error(`⛔ Detected potential infinite loop: node ${nodeId} executed ${executionCount} times`);
@@ -356,233 +333,22 @@ async function executeWorkflowNode(session, nodeId) {
         await session.save();
         console.log(`✅ Updated session current node to: ${nodeId}`);
         
+        let executionSuccess = true;
+        let executionError = null;
+        
         // Execute node based on type
-        switch (node.type) {
-            case 'message':
-                // Replace variables in content using the enhanced template processor
-                const content = processTemplate(node.content, session.data || {});
-                
-                console.log(`  Sending message: "${content}"`);
-                
-                try {
-                    // Send WhatsApp message
-                    const messageResult = await whatsappService.sendMessage(session.phone, content);
-                    console.log('✅ WhatsApp API response:', JSON.stringify(messageResult));
-                    
-                    // Get message ID from WhatsApp response
-                    const whatsappMessageId = messageResult.messages?.[0]?.id;
-                    
-                    // Create message record
-                    await Message.create({
-                        sessionId: session._id,
-                        userId: session.userId,
-                        adminId: session.adminId,
-                        campaignId: session.campaignId,
-                        sender: 'workflow',
-                        messageType: 'text',
-                        content: content,
-                        status: 'sent',
-                        nodeId: node.nodeId,
-                        whatsappMessageId
-                    });
-                    
-                    console.log('✅ Saved message to database');
-                    
-                    // Wait to avoid rate limits (also helps prevent message flood)
-                    await new Promise(resolve => setTimeout(resolve, 1500));
-                    
-                    // Move to next node if defined
-                    if (node.nextNodeId) {
-                        const nextNode = workflow.nodes.find(n => n.nodeId === node.nextNodeId);
-                        
-                        // Reset the execution count for the next node to prevent false positives
-                        resetNodeExecutionCount(session._id, node.nextNodeId);
-                        
-                        // If next node is input, just update session and wait
-                        if (nextNode && nextNode.type === 'input') {
-                            console.log(`⏸️ Next node is input type. Waiting for user response...`);
-                            
-                            // If input node has prompt content, send it now
-                            if (nextNode.content) {
-                                console.log(`📤 Sending input prompt message`);
-                                await executeWorkflowNode(session, node.nextNodeId);
-                            } else {
-                                // Just update session current node
-                                session.currentNodeId = node.nextNodeId;
-                                await session.save();
-                            }
-                        } else if (nextNode) {
-                            // For other node types, continue executing workflow
-                            console.log(`⏭️ Moving to next node: ${node.nextNodeId}`);
-                            await executeWorkflowNode(session, node.nextNodeId);
-                        }
-                    } else {
-                        console.log(`⚠️ No next node defined for message node ${node.nodeId}`);
-                    }
-                } catch (error) {
-                    console.error(`❌ Error sending message:`, error);
-                    return false;
-                }
-                break;
-                
-// In your executeWorkflowNode function, replace the case for 'interactive' with this improved version
-case 'interactive':
-    console.log(`  Executing interactive node: ${node.name}`);
-    
-    try {
-        // Process template variables in content
-        const interactiveContent = processTemplate(node.content, session.data || {});
-        
-        // Create buttons array from either options or buttons properties
-        const buttons = [];
-        
-        // First check if node has options array
-        if (node.options && Array.isArray(node.options) && node.options.length > 0) {
-            console.log(`  Found ${node.options.length} options in node`);
-            
-            // Loop through options and create buttons
-            for (const option of node.options) {
-                if (option && (option.text || option.label)) {
-                    buttons.push({
-                        text: option.text || option.label,
-                        value: option.value || option.id || option.text
-                    });
-                }
-            }
-        }
-        // Otherwise check if it has buttons array
-        else if (node.buttons && Array.isArray(node.buttons) && node.buttons.length > 0) {
-            console.log(`  Found ${node.buttons.length} buttons in node`);
-            
-            // Loop through buttons
-            for (const button of node.buttons) {
-                if (button && (button.text || button.title)) {
-                    buttons.push({
-                        text: button.text || button.title,
-                        value: button.value || button.id || button.text
-                    });
-                }
-            }
-        }
-        
-        console.log(`  Final buttons prepared: ${buttons.length}`);
-        
-        if (buttons.length === 0) {
-            console.error(`❌ No buttons available for interactive node ${node.nodeId}`);
-            
-            // Fallback to regular message if no buttons
-            console.log(`⚠️ Falling back to regular message for node ${node.nodeId}`);
-            
-            // Send regular message instead
-            const fallbackResult = await whatsappService.sendMessage(
-                session.phone, 
-                interactiveContent + "\n\nPlease reply with your choice."
-            );
-            
-            // Get WhatsApp message ID
-            const whatsappMessageId = fallbackResult.messages?.[0]?.id;
-            
-            // Create message record
-            await Message.create({
-                sessionId: session._id,
-                userId: session.userId,
-                adminId: session.adminId,
-                campaignId: session.campaignId,
-                sender: 'workflow',
-                messageType: 'text',
-                content: interactiveContent + "\n\nPlease reply with your choice.",
-                status: 'sent',
-                nodeId: node.nodeId,
-                whatsappMessageId,
-                metadata: { 
-                    fallback: true,
-                    originalType: 'interactive'
-                }
-            });
-            
-            console.log('✅ Saved fallback message to database');
-            
-            // Store the variable name for this input
-            if (node.variableName) {
-                session.pendingVariableName = node.variableName;
-                session.markModified('data');
-                await session.save();
-            }
-            
-            return true;
-        }
-        
-        // Send WhatsApp message with buttons
-        console.log(`  Sending interactive message with ${buttons.length} buttons`);
-        const messageResult = await whatsappService.sendButtonMessage(
-            session.phone, 
-            interactiveContent, 
-            buttons
-        );
-        
-        console.log(`✅ WhatsApp API response:`, messageResult);
-        
-        // Get WhatsApp message ID
-        const whatsappMessageId = messageResult.messages?.[0]?.id;
-        
-        // Create message record
-        await Message.create({
-            sessionId: session._id,
-            userId: session.userId,
-            adminId: session.adminId,
-            campaignId: session.campaignId,
-            sender: 'workflow',
-            messageType: 'interactive',
-            content: interactiveContent,
-            status: 'sent',
-            nodeId: node.nodeId,
-            whatsappMessageId,
-            metadata: { buttons }
-        });
-        
-        console.log('✅ Saved interactive message to database');
-        
-        // Wait to avoid rate limits
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
-        // Store the variable name for this input if available
-        if (node.variableName) {
-            session.pendingVariableName = node.variableName;
-            session.markModified('data');
-            await session.save();
-        }
-        
-        // Store next node ID if available
-        if (node.nextNodeId) {
-            session.nextNodeIdAfterInput = node.nextNodeId;
-            session.markModified('data');
-            await session.save();
-        }
-        
-        // Interactive nodes wait for user input, so don't continue execution
-        return true;
-    } catch (error) {
-        console.error(`❌ Error sending interactive message:`, error);
-        return false;
-    }
-    break;
-                
-            case 'input':
-                // For input nodes, send prompt if exists, then wait for user input
-                if (node.content) {
-                    // Replace variables in prompt content using template processor
-                    const promptContent = processTemplate(node.content, session.data || {});
-                    
-                    console.log(`  Sending input prompt: "${promptContent}"`);
+        try {
+            switch (node.type) {
+                case 'message':
+                    const content = processTemplate(node.content, session.data || {});
+                    console.log(`  Sending message: "${content}"`);
                     
                     try {
-                        // Send WhatsApp message for the prompt
-                        const promptResult = await whatsappService.sendMessage(session.phone, promptContent);
+                        const messageResult = await whatsappService.sendMessage(session.phone, content);
+                        console.log('✅ WhatsApp API response:', JSON.stringify(messageResult));
                         
-                        // Get message ID
-                        const whatsappMessageId = promptResult.messages?.[0]?.id;
+                        const whatsappMessageId = messageResult.messages?.[0]?.id;
                         
-                        // Create message record for the prompt
                         await Message.create({
                             sessionId: session._id,
                             userId: session.userId,
@@ -590,318 +356,535 @@ case 'interactive':
                             campaignId: session.campaignId,
                             sender: 'workflow',
                             messageType: 'text',
-                            content: promptContent,
+                            content: content,
                             status: 'sent',
                             nodeId: node.nodeId,
                             whatsappMessageId
                         });
                         
-                        console.log('✅ Saved prompt message to database');
+                        console.log('✅ Saved message to database');
+                        
+                        await new Promise(resolve => setTimeout(resolve, 1500));
+                        
+                        if (node.nextNodeId) {
+                            const nextNode = workflow.nodes.find(n => n.nodeId === node.nextNodeId);
+                            resetNodeExecutionCount(session._id, node.nextNodeId);
+                            
+                            if (nextNode && nextNode.type === 'input') {
+                                console.log(`⏸️ Next node is input type. Waiting for user response...`);
+                                
+                                if (nextNode.content) {
+                                    console.log(`📤 Sending input prompt message`);
+                                    await executeWorkflowNode(session, node.nextNodeId);
+                                } else {
+                                    session.currentNodeId = node.nextNodeId;
+                                    await session.save();
+                                }
+                            } else if (nextNode) {
+                                console.log(`⏭️ Moving to next node: ${node.nextNodeId}`);
+                                await executeWorkflowNode(session, node.nextNodeId);
+                            }
+                        } else {
+                            console.log(`⚠️ No next node defined for message node ${node.nodeId}`);
+                        }
                     } catch (error) {
-                        console.error(`❌ Error sending input prompt:`, error);
+                        console.error(`❌ Error sending message:`, error);
+                        executionSuccess = false;
+                        executionError = error.message;
                         return false;
                     }
-                }
-                
-                console.log(`⏸️ Input node - waiting for variable: ${node.variableName}`);
-                break;
-                
-            case 'condition':
-                console.log(`  Evaluating condition: ${node.condition}`);
-                
-                // Check for retry count on this condition node
-                if (node.maxRetries) {
-                    // Initialize retry count in session data if needed
-                    if (!session.data) session.data = {};
-                    if (!session.data.retryCount) session.data.retryCount = {};
-                    if (!session.data.retryCount[node.nodeId]) session.data.retryCount[node.nodeId] = 0;
+                    break;
                     
-                    // Increment retry count
-                    session.data.retryCount[node.nodeId]++;
-                    session.markModified('data');
+                case 'interactive':
+                    console.log(`  Executing interactive node: ${node.name}`);
                     
-                    console.log(`  Retry count for node ${node.nodeId}: ${session.data.retryCount[node.nodeId]}/${node.maxRetries}`);
-                    
-                    // Check if max retries reached
-                    if (session.data.retryCount[node.nodeId] > node.maxRetries) {
-                        console.log(`⚠️ Max retries (${node.maxRetries}) reached for condition node ${node.nodeId}`);
+                    try {
+                        const interactiveContent = processTemplate(node.content, session.data || {});
+                        const buttons = [];
                         
-                        // Go to a designated failure node or end the workflow
-                        if (node.maxRetriesNodeId) {
-                            console.log(`⏭️ Moving to max retries node: ${node.maxRetriesNodeId}`);
+                        if (node.options && Array.isArray(node.options) && node.options.length > 0) {
+                            console.log(`  Found ${node.options.length} options in node`);
                             
-                            // Reset the execution count for the next node
-                            resetNodeExecutionCount(session._id, node.maxRetriesNodeId);
+                            for (const option of node.options) {
+                                if (option && (option.text || option.label)) {
+                                    buttons.push({
+                                        text: option.text || option.label,
+                                        value: option.value || option.id || option.text
+                                    });
+                                }
+                            }
+                        }
+                        else if (node.buttons && Array.isArray(node.buttons) && node.buttons.length > 0) {
+                            console.log(`  Found ${node.buttons.length} buttons in node`);
                             
-                            return executeWorkflowNode(session, node.maxRetriesNodeId);
-                        } else {
-                            console.log(`⚠️ No max retries node defined, stopping workflow execution`);
+                            for (const button of node.buttons) {
+                                if (button && (button.text || button.title)) {
+                                    buttons.push({
+                                        text: button.text || button.title,
+                                        value: button.value || button.id || button.text
+                                    });
+                                }
+                            }
+                        }
+                        
+                        console.log(`  Final buttons prepared: ${buttons.length}`);
+                        
+                        if (buttons.length === 0) {
+                            console.error(`❌ No buttons available for interactive node ${node.nodeId}`);
+                            console.log(`⚠️ Falling back to regular message for node ${node.nodeId}`);
+                            
+                            const fallbackResult = await whatsappService.sendMessage(
+                                session.phone, 
+                                interactiveContent + "\n\nPlease reply with your choice."
+                            );
+                            
+                            const whatsappMessageId = fallbackResult.messages?.[0]?.id;
+                            
+                            await Message.create({
+                                sessionId: session._id,
+                                userId: session.userId,
+                                adminId: session.adminId,
+                                campaignId: session.campaignId,
+                                sender: 'workflow',
+                                messageType: 'text',
+                                content: interactiveContent + "\n\nPlease reply with your choice.",
+                                status: 'sent',
+                                nodeId: node.nodeId,
+                                whatsappMessageId,
+                                metadata: { 
+                                    fallback: true,
+                                    originalType: 'interactive'
+                                }
+                            });
+                            
+                            console.log('✅ Saved fallback message to database');
+                            
+                            if (node.variableName) {
+                                session.pendingVariableName = node.variableName;
+                                session.markModified('data');
+                                await session.save();
+                            }
+                            
+                            return true;
+                        }
+                        
+                        console.log(`  Sending interactive message with ${buttons.length} buttons`);
+                        const messageResult = await whatsappService.sendButtonMessage(
+                            session.phone, 
+                            interactiveContent, 
+                            buttons
+                        );
+                        
+                        console.log(`✅ WhatsApp API response:`, messageResult);
+                        
+                        const whatsappMessageId = messageResult.messages?.[0]?.id;
+                        
+                        await Message.create({
+                            sessionId: session._id,
+                            userId: session.userId,
+                            adminId: session.adminId,
+                            campaignId: session.campaignId,
+                            sender: 'workflow',
+                            messageType: 'interactive',
+                            content: interactiveContent,
+                            status: 'sent',
+                            nodeId: node.nodeId,
+                            whatsappMessageId,
+                            metadata: { buttons }
+                        });
+                        
+                        console.log('✅ Saved interactive message to database');
+                        
+                        await new Promise(resolve => setTimeout(resolve, 1500));
+                        
+                        if (node.variableName) {
+                            session.pendingVariableName = node.variableName;
+                            session.markModified('data');
+                            await session.save();
+                        }
+                        
+                        if (node.nextNodeId) {
+                            session.nextNodeIdAfterInput = node.nextNodeId;
+                            session.markModified('data');
+                            await session.save();
+                        }
+                        
+                        return true;
+                    } catch (error) {
+                        console.error(`❌ Error sending interactive message:`, error);
+                        executionSuccess = false;
+                        executionError = error.message;
+                        return false;
+                    }
+                    break;
+                        
+                case 'input':
+                    if (node.content) {
+                        const promptContent = processTemplate(node.content, session.data || {});
+                        console.log(`  Sending input prompt: "${promptContent}"`);
+                        
+                        try {
+                            const promptResult = await whatsappService.sendMessage(session.phone, promptContent);
+                            const whatsappMessageId = promptResult.messages?.[0]?.id;
+                            
+                            await Message.create({
+                                sessionId: session._id,
+                                userId: session.userId,
+                                adminId: session.adminId,
+                                campaignId: session.campaignId,
+                                sender: 'workflow',
+                                messageType: 'text',
+                                content: promptContent,
+                                status: 'sent',
+                                nodeId: node.nodeId,
+                                whatsappMessageId
+                            });
+                            
+                            console.log('✅ Saved prompt message to database');
+                        } catch (error) {
+                            console.error(`❌ Error sending input prompt:`, error);
+                            executionSuccess = false;
+                            executionError = error.message;
                             return false;
                         }
                     }
-                }
-                
-                // Debug the data being used for condition evaluation
-                console.log(`  Evaluation data:`, session.data);
-                
-                // Evaluate condition
-                const conditionResult = evaluateCondition(node.condition, session.data);
-                console.log(`  Condition result: ${conditionResult}`);
-                
-                // Save condition result to data for potential debugging
-                if (!session.data) session.data = {};
-                session.data[`${node.nodeId}_result`] = conditionResult;
-                session.markModified('data');
-                await session.save();
-                
-                // Determine next node based on condition result
-                const nextNodeId = conditionResult ? node.trueNodeId : node.falseNodeId;
-                
-                if (nextNodeId) {
-                    console.log(`⏭️ Moving to ${conditionResult ? 'true' : 'false'} node: ${nextNodeId}`);
                     
-                    // Reset the execution count for the next node
-                    resetNodeExecutionCount(session._id, nextNodeId);
+                    console.log(`⏸️ Input node - waiting for variable: ${node.variableName}`);
+                    break;
                     
-                    // Add a small delay before executing the next node
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                case 'condition':
+                    console.log(`  Evaluating condition: ${node.condition}`);
                     
-                    await executeWorkflowNode(session, nextNodeId);
-                } else {
-                    console.error(`❌ No ${conditionResult ? 'true' : 'false'} node defined for condition`);
-                    return false;
-                }
-                break;
-            
-            case 'api':
-                console.log(`  Executing API node: ${node.apiEndpoint}`);
-                
-                try {
-                    // Initialize session data if needed
-                    if (!session.data) {
-                        session.data = {};
-                    }
-                    
-                    // Special handling for KYC verification endpoints
-                    if (node.apiEndpoint === '/api/verification/aadhaar') {
-                        console.log('  🔍 Special handling for direct Aadhaar verification');
+                    if (node.maxRetries) {
+                        if (!session.data) session.data = {};
+                        if (!session.data.retryCount) session.data.retryCount = {};
+                        if (!session.data.retryCount[node.nodeId]) session.data.retryCount[node.nodeId] = 0;
                         
-                        try {
-                            // Import KYC handlers dynamically to avoid circular dependencies
-                            const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                        session.data.retryCount[node.nodeId]++;
+                        session.markModified('data');
+                        
+                        console.log(`  Retry count for node ${node.nodeId}: ${session.data.retryCount[node.nodeId]}/${node.maxRetries}`);
+                        
+                        if (session.data.retryCount[node.nodeId] > node.maxRetries) {
+                            console.log(`⚠️ Max retries (${node.maxRetries}) reached for condition node ${node.nodeId}`);
                             
-                            // Process Aadhaar verification
-                            const result = await kycWorkflowHandlers.verifyAadhaar(session._id);
-                            console.log('  Aadhaar verification result:', result);
-                            
-                            // Store result in session data
-                            session.data.aadhaarVerificationResult = result;
-                            session.data.isAadhaarVerified = result.success;
-                            if (result.success && result.aadhaarName) {
-                                session.data.aadhaarName = result.aadhaarName;
+                            if (node.maxRetriesNodeId) {
+                                console.log(`⏭️ Moving to max retries node: ${node.maxRetriesNodeId}`);
+                                resetNodeExecutionCount(session._id, node.maxRetriesNodeId);
+                                return executeWorkflowNode(session, node.maxRetriesNodeId);
+                            } else {
+                                console.log(`⚠️ No max retries node defined, stopping workflow execution`);
+                                return false;
                             }
-                            session.markModified('data');
-                            await session.save();
-                            
-                            // Track in GTM - ADDED CODE
-                            try {
-                                const user = await User.findById(session.userId);
-                                if (user) {
-                                    await kycGtmService.trackKycStep(user, 'aadhaar', result.success);
-                                    kycGtmService.pushDataLayerEvent(session, 'kyc_verification', {
-                                        step: 'aadhaar',
-                                        success: result.success
-                                    });
-                                }
-                            } catch (gtmError) {
-                                console.error('GTM tracking error:', gtmError);
-                                // Non-blocking - continue despite GTM errors
-                            }
-                            
-                        } catch (kycError) {
-                            console.error('Error verifying Aadhaar:', kycError);
-                            // Set verification to false on error
-                            session.data.isAadhaarVerified = false;
-                            session.markModified('data');
-                            await session.save();
-                            
-                            // Track failed verification in GTM - ADDED CODE
-                            try {
-                                const user = await User.findById(session.userId);
-                                if (user) {
-                                    await kycGtmService.trackKycStep(user, 'aadhaar', false);
-                                }
-                            } catch (gtmError) {
-                                console.error('GTM tracking error:', gtmError);
-                            }
-                            
-                            // Go to error node if defined
-                            if (node.errorNodeId) {
-                                return executeWorkflowNode(session, node.errorNodeId);
-                            }
-                            throw kycError;
-                        }
-                    }
-                    // Other API handlers continue as before...
-                    // ... [Keep all your existing API handlers] ...
-                    else {
-                        // For other APIs, make actual HTTP call
-                        
-                        // Replace variables in API params
-                        const params = {};
-                        if (node.apiParams) {
-                            for (const [key, value] of Object.entries(node.apiParams)) {
-                                if (typeof value === 'string' && value.includes('{{')) {
-                                    // Replace placeholders with values from session data
-                                    let paramValue = value;
-                                    for (const [dataKey, dataValue] of Object.entries(session.data || {})) {
-                                        if (dataValue !== undefined && dataValue !== null) {
-                                            const regex = new RegExp(`{{\\s*${dataKey}\\s*}}`, 'g');
-                                            paramValue = paramValue.replace(regex, dataValue);
-                                        }
-                                    }
-                                    params[key] = paramValue;
-                                } else {
-                                    params[key] = value;
-                                }
-                            }
-                        }
-                        
-                        console.log(`  API params:`, params);
-                        
-                        // Get API base URL from env or use default
-                        const apiBaseUrl = process.env.API_BASE_URL || '';
-                        
-                        // Generate auth token for API call
-                        const token = generateSessionToken(session);
-                        
-                        // Make the API call
-                        const apiResponse = await axios({
-                            method: node.apiMethod || 'GET',
-                            url: `${apiBaseUrl}${node.apiEndpoint}`,
-                            data: node.apiMethod === 'GET' ? undefined : params,
-                            params: node.apiMethod === 'GET' ? params : undefined,
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${token}`
-                            }
-                        });
-                        
-                        console.log(`✅ API call successful: ${node.apiEndpoint}`);
-                        
-                        // Store API response in session data
-                        if (apiResponse.data && apiResponse.data.data) {
-                            session.data = {
-                                ...session.data,
-                                ...apiResponse.data.data
-                            };
                         }
                     }
                     
-                    // Save session with updated data
+                    console.log(`  Evaluation data:`, session.data);
+                    
+                    const conditionResult = evaluateCondition(node.condition, session.data);
+                    console.log(`  Condition result: ${conditionResult}`);
+                    
+                    // UNIFIED: Track condition evaluation
+                    try {
+                        await unifiedGtmService.trackConditionEvaluation(
+                            session, 
+                            node.condition, 
+                            conditionResult, 
+                            node.nodeId, 
+                            node.name, 
+                            conditionResult ? node.trueNodeId : node.falseNodeId
+                        );
+                    } catch (trackingError) {
+                        console.error('Unified GTM tracking error for condition evaluation:', trackingError);
+                    }
+                    
+                    if (!session.data) session.data = {};
+                    session.data[`${node.nodeId}_result`] = conditionResult;
                     session.markModified('data');
                     await session.save();
                     
-                    // Move to next node if defined
-                    if (node.nextNodeId) {
-                        console.log(`⏭️ Moving to next node: ${node.nextNodeId}`);
-                        
-                        // Reset the execution count for the next node
-                        resetNodeExecutionCount(session._id, node.nextNodeId);
-                        
-                        // Add delay before moving to next node
+                    const nextNodeId = conditionResult ? node.trueNodeId : node.falseNodeId;
+                    
+                    if (nextNodeId) {
+                        console.log(`⏭️ Moving to ${conditionResult ? 'true' : 'false'} node: ${nextNodeId}`);
+                        resetNodeExecutionCount(session._id, nextNodeId);
                         await new Promise(resolve => setTimeout(resolve, 500));
-                        
-                        await executeWorkflowNode(session, node.nextNodeId);
+                        await executeWorkflowNode(session, nextNodeId);
                     } else {
-                        console.log(`⚠️ No next node defined for API node ${node.nodeId}`);
-                        return true;
-                    }
-                } catch (error) {
-                    console.error(`❌ Error executing API node:`, error.message);
-                    
-                    // Store error in session data
-                    if (!session.data) {
-                        session.data = {};
-                    }
-                    
-                    session.data.apiError = error.message;
-                    session.data.apiErrorCode = error.response?.status || 500;
-                    session.markModified('data');
-                    await session.save();
-                    
-                    // IMPORTANT: Go to error node if defined, otherwise STOP execution
-                    if (node.errorNodeId) {
-                        console.log(`⏭️ Moving to error node: ${node.errorNodeId}`);
-                        
-                        // Reset the execution count for the error node
-                        resetNodeExecutionCount(session._id, node.errorNodeId);
-                        
-                        await executeWorkflowNode(session, node.errorNodeId);
-                    } else {
-                        console.log(`⚠️ No error node defined, stopping workflow execution`);
-                        // Do NOT continue to next node on error if no error node is defined
+                        console.error(`❌ No ${conditionResult ? 'true' : 'false'} node defined for condition`);
+                        executionSuccess = false;
+                        executionError = `No ${conditionResult ? 'true' : 'false'} node defined`;
                         return false;
                     }
-                }
-                break;
+                    break;
                 
-            case 'end':
-                console.log(`  Reached end node`);
-                
-                // Track workflow completion in GTM - ADDED CODE
-                try {
-                    // Track overall workflow completion
-                    const user = await User.findById(session.userId);
-                    if (user && workflow.name.toLowerCase().includes('kyc')) {
-                        // Get KYC status
-                        const kycStatus = {
-                            isAadhaarVerified: user.isAadhaarVerified || false,
-                            isAadhaarValidated: user.isAadhaarValidated || false,
-                            isPanVerified: user.isPanVerified || false,
-                            isAadhaarPanLinked: session.data?.isAadhaarPanLinked || false,
-                            isBankVerified: session.data?.isBankVerified || false
-                        };
+                case 'api':
+                    console.log(`  Executing API node: ${node.apiEndpoint}`);
+                    
+                    const apiStartTime = Date.now();
+                    let apiSuccess = true;
+                    let apiResponseTime = 0;
+                    
+                    try {
+                        if (!session.data) {
+                            session.data = {};
+                        }
                         
-                        // Calculate completion percentage
-                        const steps = Object.keys(kycStatus);
-                        const completedSteps = steps.filter(step => kycStatus[step]).length;
-                        const isComplete = completedSteps === steps.length;
+                        // Special handling for KYC verification endpoints
+                        if (node.apiEndpoint === '/api/verification/aadhaar') {
+                            console.log('  🔍 Special handling for direct Aadhaar verification');
+                            
+                            try {
+                                const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                                const result = await kycWorkflowHandlers.verifyAadhaar(session._id);
+                                console.log('  Aadhaar verification result:', result);
+                                
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.aadhaarVerificationResult = result;
+                                session.data.isAadhaarVerified = result.success;
+                                if (result.success && result.aadhaarName) {
+                                    session.data.aadhaarName = result.aadhaarName;
+                                }
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // UNIFIED: Track KYC step using unified service
+                                try {
+                                    const user = await User.findById(session.userId);
+                                    if (user) {
+                                        await unifiedGtmService.trackKycStep(
+                                            user, 
+                                            'aadhaar', 
+                                            result.success, 
+                                            {
+                                                session: session,
+                                                execution_time_ms: apiResponseTime,
+                                                verification_type: 'api_verification',
+                                                provider: 'surepass'
+                                            }
+                                        );
+                                    }
+                                } catch (gtmError) {
+                                    console.error('Unified GTM tracking error:', gtmError);
+                                }
+                                
+                            } catch (kycError) {
+                                console.error('Error verifying Aadhaar:', kycError);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                
+                                session.data.isAadhaarVerified = false;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // UNIFIED: Track failed KYC step
+                                try {
+                                    const user = await User.findById(session.userId);
+                                    if (user) {
+                                        await unifiedGtmService.trackKycStep(
+                                            user, 
+                                            'aadhaar', 
+                                            false, 
+                                            {
+                                                session: session,
+                                                execution_time_ms: apiResponseTime,
+                                                error: kycError.message
+                                            }
+                                        );
+                                    }
+                                } catch (gtmError) {
+                                    console.error('Unified GTM tracking error:', gtmError);
+                                }
+                                
+                                executionSuccess = false;
+                                executionError = kycError.message;
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw kycError;
+                            }
+                        }
+                        else {
+                            // For other APIs, make actual HTTP call
+                            const params = {};
+                            if (node.apiParams) {
+                                for (const [key, value] of Object.entries(node.apiParams)) {
+                                    if (typeof value === 'string' && value.includes('{{')) {
+                                        let paramValue = value;
+                                        for (const [dataKey, dataValue] of Object.entries(session.data || {})) {
+                                            if (dataValue !== undefined && dataValue !== null) {
+                                                const regex = new RegExp(`{{\\s*${dataKey}\\s*}}`, 'g');
+                                                paramValue = paramValue.replace(regex, dataValue);
+                                            }
+                                        }
+                                        params[key] = paramValue;
+                                    } else {
+                                        params[key] = value;
+                                    }
+                                }
+                            }
+                            
+                            console.log(`  API params:`, params);
+                            
+                            const apiBaseUrl = process.env.API_BASE_URL || '';
+                            const token = generateSessionToken(session);
+                            
+                            const apiResponse = await axios({
+                                method: node.apiMethod || 'GET',
+                                url: `${apiBaseUrl}${node.apiEndpoint}`,
+                                data: node.apiMethod === 'GET' ? undefined : params,
+                                params: node.apiMethod === 'GET' ? params : undefined,
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${token}`
+                                }
+                            });
+                            
+                            apiResponseTime = Date.now() - apiStartTime;
+                            console.log(`✅ API call successful: ${node.apiEndpoint}`);
+                            
+                            if (apiResponse.data && apiResponse.data.data) {
+                                session.data = {
+                                    ...session.data,
+                                    ...apiResponse.data.data
+                                };
+                            }
+                        }
                         
-                        // Track final KYC status
-                        await kycGtmService.trackKycStep(user, 'workflow_complete', isComplete);
+                        // UNIFIED: Track API call
+                        try {
+                            await unifiedGtmService.trackApiCall(
+                                session, 
+                                node.apiEndpoint, 
+                                node.apiMethod || 'GET', 
+                                apiSuccess, 
+                                apiResponseTime, 
+                                node.nodeId, 
+                                node.name
+                            );
+                        } catch (trackingError) {
+                            console.error('Unified GTM tracking error for API call:', trackingError);
+                        }
                         
-                        // Push dataLayer event with final status
-                        kycGtmService.pushDataLayerEvent(session, 'kyc_workflow_completed', {
-                            ...kycStatus,
-                            completion_percentage: Math.round((completedSteps / steps.length) * 100),
-                            completed_steps: completedSteps,
-                            total_steps: steps.length,
-                            start_time: session.startedAt,
-                            completion_time: new Date(),
-                            duration_ms: new Date() - session.startedAt
-                        });
+                        session.markModified('data');
+                        await session.save();
+                        
+                        if (node.nextNodeId) {
+                            console.log(`⏭️ Moving to next node: ${node.nextNodeId}`);
+                            resetNodeExecutionCount(session._id, node.nextNodeId);
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                            await executeWorkflowNode(session, node.nextNodeId);
+                        } else {
+                            console.log(`⚠️ No next node defined for API node ${node.nodeId}`);
+                            return true;
+                        }
+                    } catch (error) {
+                        console.error(`❌ Error executing API node:`, error.message);
+                        
+                        apiResponseTime = Date.now() - apiStartTime;
+                        apiSuccess = false;
+                        executionSuccess = false;
+                        executionError = error.message;
+                        
+                        // UNIFIED: Track failed API call
+                        try {
+                            await unifiedGtmService.trackApiCall(
+                                session, 
+                                node.apiEndpoint, 
+                                node.apiMethod || 'GET', 
+                                false, 
+                                apiResponseTime, 
+                                node.nodeId, 
+                                node.name
+                            );
+                        } catch (trackingError) {
+                            console.error('Unified GTM tracking error for failed API call:', trackingError);
+                        }
+                        
+                        if (!session.data) {
+                            session.data = {};
+                        }
+                        
+                        session.data.apiError = error.message;
+                        session.data.apiErrorCode = error.response?.status || 500;
+                        session.markModified('data');
+                        await session.save();
+                        
+                        if (node.errorNodeId) {
+                            console.log(`⏭️ Moving to error node: ${node.errorNodeId}`);
+                            resetNodeExecutionCount(session._id, node.errorNodeId);
+                            await executeWorkflowNode(session, node.errorNodeId);
+                        } else {
+                            console.log(`⚠️ No error node defined, stopping workflow execution`);
+                            return false;
+                        }
                     }
-                } catch (gtmError) {
-                    console.error('GTM tracking error at workflow completion:', gtmError);
-                }
-                
-                // Mark session as completed
-                session.status = 'completed';
-                session.completedAt = new Date();
-                await session.save();
-                console.log(`✅ Workflow completed`);
-                return true;
-                
-            default:
-                console.log(`⚠️ Unsupported node type: ${node.type}`);
-                return false;
+                    break;
+                    
+                case 'end':
+                    console.log(`  Reached end node`);
+                    
+                    // UNIFIED: Track workflow completion
+                    try {
+                        const totalExecutionTime = Date.now() - (session.startedAt ? session.startedAt.getTime() : Date.now());
+                        await unifiedGtmService.trackWorkflowCompletion(session, workflow, totalExecutionTime);
+                    } catch (gtmError) {
+                        console.error('Unified GTM tracking error at workflow completion:', gtmError);
+                    }
+                    
+                    session.status = 'completed';
+                    session.completedAt = new Date();
+                    await session.save();
+                    console.log(`✅ Workflow completed`);
+                    return true;
+                    
+                default:
+                    console.log(`⚠️ Unsupported node type: ${node.type}`);
+                    executionSuccess = false;
+                    executionError = `Unsupported node type: ${node.type}`;
+                    return false;
+            }
+        } catch (nodeError) {
+            executionSuccess = false;
+            executionError = nodeError.message;
+            throw nodeError;
+        }
+        
+        // UNIFIED: Track node execution completion
+        try {
+            const executionTime = Date.now() - startTime;
+            await unifiedGtmService.trackNodeExecution(
+                session, 
+                node, 
+                executionTime, 
+                executionSuccess, 
+                executionError
+            );
+        } catch (trackingError) {
+            console.error('Unified GTM tracking error for node execution:', trackingError);
         }
         
         return true;
     } catch (error) {
         console.error(`❌ Error executing workflow node:`, error);
-        // Try to save session anyway
+        
+        // UNIFIED: Track failed node execution
+        try {
+            const executionTime = Date.now() - startTime;
+            await unifiedGtmService.trackNodeExecution(
+                session, 
+                { nodeId, name: 'Unknown Node', type: 'unknown' }, 
+                executionTime, 
+                false, 
+                error.message
+            );
+        } catch (trackingError) {
+            console.error('Unified GTM tracking error for failed node execution:', trackingError);
+        }
+        
         try {
             await session.save();
         } catch (saveError) {
@@ -911,9 +894,56 @@ case 'interactive':
     }
 }
 
+/**
+ * Start workflow execution with unified tracking
+ */
+async function startWorkflowExecution(session, startNodeId = null) {
+    try {
+        console.log(`🚀 Starting workflow execution for session ${session._id}`);
+        
+        const workflow = await Workflow.findById(session.workflowId);
+        if (!workflow) {
+            console.error(`❌ Workflow ${session.workflowId} not found`);
+            return false;
+        }
+        
+        // UNIFIED: Track workflow start
+        try {
+            await unifiedGtmService.trackWorkflowStart(session, workflow);
+        } catch (trackingError) {
+            console.error('Unified GTM tracking error for workflow start:', trackingError);
+        }
+        
+        const nodeToExecute = startNodeId || workflow.startNodeId;
+        
+        if (!nodeToExecute) {
+            console.error(`❌ No start node ID available for workflow ${workflow._id}`);
+            return false;
+        }
+        
+        session.status = 'active';
+        session.startedAt = new Date();
+        await session.save();
+        
+        return await executeWorkflowNode(session, nodeToExecute);
+    } catch (error) {
+        console.error(`❌ Error starting workflow execution:`, error);
+        
+        try {
+            session.status = 'abandoned';
+            await session.save();
+        } catch (saveError) {
+            console.error(`❌ Error saving session status:`, saveError);
+        }
+        
+        return false;
+    }
+}
+
 module.exports = {
     executeWorkflowNode,
     processWorkflowInput,
+    startWorkflowExecution,
     evaluateCondition,
-    processTemplate // Export the template processor for testing
+    processTemplate
 };

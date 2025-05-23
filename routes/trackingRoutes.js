@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { adminAuth, userAuth } = require('../middlewares/auth');
-const kycGtmService = require('../services/kycGtmServices');
+const kycGtmService = require('../services/gtmTrackingServices');
 const { TrackingEvent } = require('../models/trackingEvents');
 
 // Get KYC tracking status for a user

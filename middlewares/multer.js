@@ -56,7 +56,9 @@ const upload = multer({
     limits: {
         fileSize: 100 * 1024 * 1024, // 100MB max file size
         files: 10,
-        fields: 10
+        fields: 50, // INCREASED FROM 10 to 50 - This fixes the "Too many fields" error
+        fieldNameSize: 100, // Optional: limit field name size
+        fieldSize: 1024 * 1024 // Optional: 1MB per field value
     }
 });
 
@@ -73,6 +75,11 @@ const handleMulterError = (err, req, res, next) => {
             return res.status(400).json({
                 success: false,
                 message: 'Too many files. Maximum 10 files allowed.'
+            });
+        } else if (err.code === 'LIMIT_FIELD_COUNT') {
+            return res.status(400).json({
+                success: false,
+                message: 'Too many fields. Maximum 50 fields allowed.'
             });
         } else {
             return res.status(400).json({

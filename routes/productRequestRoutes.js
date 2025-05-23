@@ -7,7 +7,7 @@ const multer = require('../middlewares/multer');
 const productRequestController = require('../controllers/productRequestControllers');
 
 // Configure multer for product image uploads
-const productImagesUpload = multer.array('images', 10); // Allow up to 10 product images
+const productImagesUpload = multer.array('files', 10); // Allow up to 10 files
 
 // Admin routes for product requests
 router.post(
