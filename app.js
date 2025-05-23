@@ -67,7 +67,7 @@ const corsOptions = {
     origin: function (origin, callback) {
         // For development, allow all origins or add your frontend URL
         // For production, use the ALLOWED_ORIGINS list
-        const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:5173'];
+        const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://127.0.0.1:5173','http://localhost:5174', 'http://127.0.0.1:5174'];
         
         // During development or for testing, sometimes origin is undefined (like Postman requests)
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
