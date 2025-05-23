@@ -133,7 +133,26 @@ exports.createProductRequest = async (req, res) => {
             subCategory: productData.subCategory || null,
             brand: productData.brand || null,
             images: productImages,
-            attributes: productData.attributes ? JSON.parse(productData.attributes) : [],
+            attributes: (() => {
+                if (!productData.attributes) return [];
+                
+                // If it's already an object/array, return it directly
+                if (typeof productData.attributes === 'object') {
+                    return productData.attributes;
+                }
+                
+                // If it's a string, try to parse it
+                if (typeof productData.attributes === 'string') {
+                    try {
+                        return JSON.parse(productData.attributes);
+                    } catch (parseError) {
+                        console.warn('Failed to parse attributes:', parseError);
+                        return [];
+                    }
+                }
+                
+                return [];
+            })(),
             inventory: {
                 quantity: productData.quantity ? parseInt(productData.quantity) : 0,
                 sku: productData.sku || null,
