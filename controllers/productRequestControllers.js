@@ -303,85 +303,107 @@ exports.updateProductRequest = async (req, res) => {
             }
         }
 
-        // Process new uploaded images
+        // Process new uploaded images - USING FIXED FIREBASE UPLOAD METHOD
         let newImages = [];
         if (files && Array.isArray(files) && files.length > 0) {
             try {
                 // Get Firebase Storage bucket
                 const bucket = getBucket();
+                console.log(`Got Firebase bucket: ${bucket.name}`);
                 
-                for (let i = 0; i < files.length; i++) {
-                    const file = files[i];
-                    
-                    // Generate unique filename
-                    const fileExt = path.extname(file.originalname);
-                    const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
-                    
-                    // Create folder structure by date: yyyy/mm/
-                    const currentDate = new Date();
-                    const year = currentDate.getFullYear();
-                    const month = currentDate.getMonth() + 1;
-                    
-                    // Create a path in Firebase Storage
-                    const filePath = `uploads/products/${year}/${month}/${filename}`;
-                    
-                    // Upload to Firebase
-                    console.log(`Uploading product image to Firebase: ${filePath}`);
-                    const fileRef = bucket.file(filePath);
-                    await fileRef.save(file.buffer, {
-                        metadata: {
-                            contentType: file.mimetype,
-                            originalName: file.originalname
-                        },
-                        public: true,
-                        resumable: false
-                    });
-                    
-                    // Get public URL
-                    const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
-                    console.log(`Product image uploaded to Firebase: ${fileUrl}`);
-                    
-                    // Create file upload record
-                    const fileUpload = await FileUpload.create({
-                        filename,
-                        originalFilename: file.originalname,
-                        path: filePath,
-                        url: fileUrl,
-                        mimeType: file.mimetype,
-                        size: file.size,
-                        uploadedBy: {
-                            id: adminId,
-                            role: 'admin'
-                        },
-                        adminId,
-                        entityType: 'product',
-                        status: 'permanent',
-                        isPublic: true,
-                        bucket: bucket.name,
-                        storageProvider: 'google_cloud',
-                        storageMetadata: {
-                            firebasePath: filePath
+                for (const file of files) {
+                    try {
+                        // Generate unique filename
+                        const fileExt = path.extname(file.originalname);
+                        const filename = `${crypto.randomBytes(16).toString('hex')}${fileExt}`;
+                        
+                        // Create folder structure by date: yyyy/mm/
+                        const currentDate = new Date();
+                        const year = currentDate.getFullYear();
+                        const month = currentDate.getMonth() + 1;
+                        
+                        const filePath = `uploads/products/${year}/${month}/${filename}`;
+                        
+                        console.log(`Uploading product image to Firebase: ${filePath}`);
+                        
+                        // FIXED METHOD: Write to temp file first, then upload
+                        const tempFilePath = path.join(os.tmpdir(), filename);
+                        await fs.writeFile(tempFilePath, file.buffer);
+                        
+                        // Upload using bucket.upload() method instead of fileRef.save()
+                        const [uploadedFile] = await bucket.upload(tempFilePath, {
+                            destination: filePath,
+                            metadata: {
+                                contentType: file.mimetype,
+                                metadata: {
+                                    originalName: file.originalname,
+                                    uploadedBy: adminId
+                                }
+                            },
+                            public: true
+                        });
+                        
+                        // Clean up temp file
+                        try {
+                            await fs.unlink(tempFilePath);
+                        } catch (unlinkError) {
+                            console.log('Could not delete temp file:', unlinkError.message);
                         }
-                    });
-                    
-                    // Add to new images array
-                    newImages.push({
-                        url: fileUrl,
-                        isPrimary: false, // By default, new images are not primary
-                        caption: updateData.newImageCaptions && updateData.newImageCaptions[i] 
-                          ? updateData.newImageCaptions[i] 
-                          : null
-                    });
+                        
+                        // Get public URL
+                        const fileUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+                        
+                        console.log(`File uploaded successfully to Firebase: ${fileUrl}`);
+                        
+                        // Create file upload record
+                        const fileUpload = await FileUpload.create({
+                            filename,
+                            originalFilename: file.originalname,
+                            path: filePath,
+                            url: fileUrl,
+                            mimeType: file.mimetype,
+                            size: file.size,
+                            uploadedBy: {
+                                id: adminId,
+                                role: 'admin'
+                            },
+                            adminId,
+                            entityType: 'product',
+                            entityId: productId, // Link to the product being updated
+                            status: 'permanent',
+                            isPublic: true,
+                            bucket: bucket.name,
+                            storageProvider: 'google_cloud',
+                            storageMetadata: {
+                                firebasePath: filePath
+                            }
+                        });
+                        
+                        // Add to new images array
+                        newImages.push({
+                            url: fileUrl,
+                            isPrimary: false, // By default, new images are not primary
+                            caption: updateData.newImageCaptions && updateData.newImageCaptions[newImages.length] 
+                              ? updateData.newImageCaptions[newImages.length] 
+                              : null
+                        });
+                        
+                    } catch (fileError) {
+                        console.error("Error uploading file to Firebase:", fileError);
+                        // Continue with other files
+                    }
                 }
-            } catch (firebaseError) {
-                console.error("Error uploading new product images to Firebase:", firebaseError);
+            } catch (storageError) {
+                console.error("Error with Firebase storage:", storageError);
                 return res.status(500).json({
                     success: false,
-                    message: "Error uploading new product images",
-                    error: firebaseError.message
+                    message: "Error uploading files to storage",
+                    error: storageError.message
                 });
             }
         }
+
+        console.log(`Successfully processed ${newImages.length} new images`);
 
         // Handle existing images (keep, update, or remove)
         let finalImages = [];
@@ -473,14 +495,31 @@ exports.updateProductRequest = async (req, res) => {
             };
         }
 
-        // Handle attributes (parsing from JSON if needed)
+        // Handle attributes - support both JSON string and form-data format
         if (updateData.attributes) {
             try {
-                productUpdateData.attributes = JSON.parse(updateData.attributes);
+                if (typeof updateData.attributes === 'string') {
+                    productUpdateData.attributes = JSON.parse(updateData.attributes);
+                } else {
+                    productUpdateData.attributes = updateData.attributes;
+                }
             } catch (e) {
-                console.warn("Could not parse attributes:", e);
-                // Keep existing attributes if parsing fails
-                productUpdateData.attributes = productRequest.attributes;
+                console.warn("Could not parse attributes, trying form-data format");
+                // Try form-data format like attributes[0][name], attributes[0][value]
+                const attributesArray = [];
+                let index = 0;
+                
+                while (updateData[`attributes[${index}][name]`] !== undefined) {
+                    const name = updateData[`attributes[${index}][name]`];
+                    const value = updateData[`attributes[${index}][value]`];
+                    
+                    if (name && value) {
+                        attributesArray.push({ name, value });
+                    }
+                    index++;
+                }
+                
+                productUpdateData.attributes = attributesArray.length > 0 ? attributesArray : productRequest.attributes;
             }
         }
 
@@ -494,7 +533,13 @@ exports.updateProductRequest = async (req, res) => {
         res.status(200).json({
             success: true,
             message: "Product request updated successfully",
-            productRequest: updatedProductRequest
+            productRequest: updatedProductRequest,
+            uploadStats: {
+                newFilesProcessed: files ? files.length : 0,
+                successfulUploads: newImages.length,
+                failedUploads: files ? files.length - newImages.length : 0,
+                totalImages: finalImages.length
+            }
         });
     } catch (error) {
         console.error("Update product request error:", error);
