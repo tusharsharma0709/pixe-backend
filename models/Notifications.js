@@ -17,7 +17,7 @@ const notificationSchema = new mongoose.Schema({
             'admin_approval',          // Admin was approved
             'admin_rejection',         // Admin was rejected
             
-            // NEW: Registration flow types
+            // Registration flow types
             'registration_update',     // Registration status update
             'fb_credentials_verified', // Facebook credentials verified
             'fb_credentials_failed',   // Facebook credentials failed
@@ -29,9 +29,17 @@ const notificationSchema = new mongoose.Schema({
             'campaign_approval',       // Campaign approved
             'campaign_rejection',      // Campaign rejected
             'campaign_published',      // Campaign published
+            
+            // UPDATED: Product and Catalog notifications
             'product_request',         // New product request
             'product_approval',        // Product approved
             'product_rejection',       // Product rejected
+            'product_published',       // Product published to catalog
+            'catalog_request',         // New catalog request (pending review)
+            'catalog_approval',        // Product catalog approved
+            'catalog_rejection',       // Product catalog rejected
+            'catalog_published',       // Product catalog published
+            
             'lead_assigned',           // Lead assigned to agent
             'lead_update',             // Lead status updated
             'workflow_created',        // New workflow created
@@ -58,6 +66,7 @@ const notificationSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    // UPDATED: Use adminId instead of separate field names for consistency
     adminId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Admins',
@@ -77,10 +86,11 @@ const notificationSchema = new mongoose.Schema({
                 'CampaignRequest', 
                 'Product', 
                 'ProductRequest', 
+                'ProductCatalog',    // ADDED: ProductCatalog
                 'User', 
                 'Workflow', 
                 'Agent', 
-                'UserSession'  // Added UserSession
+                'UserSession'
             ],
             default: null
         },
