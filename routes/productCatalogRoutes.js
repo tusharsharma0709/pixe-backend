@@ -39,8 +39,10 @@ router.patch('/:id', (req, res, next) => {
     // First try admin auth, if it fails, try superadmin auth
     adminAuth(req, res, (err) => {
         if (err) {
+            // If admin auth fails, try superadmin auth
             superAdminAuth(req, res, next);
         } else {
+            // Admin auth succeeded
             next();
         }
     });
