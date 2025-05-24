@@ -1,4 +1,4 @@
-// routes/trackingRoutes.js - Updated for unified GTM tracking service
+// routes/trackingRoutes.js - Complete updated tracking routes using unified service
 const express = require('express');
 const router = express.Router();
 const { adminAuth, userAuth } = require('../middlewares/auth');
@@ -9,6 +9,9 @@ const unifiedGtmService = require('../services/gtmTrackingServices');
 
 // UPDATED: Use unified tracking events model
 const UnifiedTrackingEvent = mongoose.model('UnifiedTrackingEvents');
+
+// LEGACY SUPPORT: If you still need the old TrackingEvent model
+// const { TrackingEvent } = require('../models/trackingEvents');
 
 // Get KYC tracking status for a user (UPDATED)
 router.get('/kyc/:userId', adminAuth, async (req, res) => {
@@ -342,6 +345,30 @@ router.get('/dashboard/realtime', adminAuth, async (req, res) => {
             { $group: { _id: '$event_category', count: { $sum: 1 } } }
         ]);
         
+        // Get SurePass API performance
+        const surePassStats = await UnifiedTrackingEvent.aggregate([
+            { 
+                $match: { 
+                    timestamp: { $gte: last24Hours },
+                    event_category: 'kyc',
+                    'metadata.is_surepass_api': true
+                }
+            },
+            {
+                $group: {
+                    _id: '$kyc_step',
+                    total_calls: { $sum: 1 },
+                    successful_calls: { $sum: { $cond: ['$success', 1, 0] } },
+                    avg_response_time: { $avg: '$response_time_ms' }
+                }
+            },
+            {
+                $addFields: {
+                    success_rate: { $divide: ['$successful_calls', '$total_calls'] }
+                }
+            }
+        ]);
+        
         res.json({
             success: true,
             data: {
@@ -351,6 +378,7 @@ router.get('/dashboard/realtime', adminAuth, async (req, res) => {
                     acc[curr._id] = curr.count;
                     return acc;
                 }, {}),
+                surepass_performance: surePassStats,
                 last_updated: new Date().toISOString()
             }
         });
@@ -398,15 +426,134 @@ router.get('/analytics/:workflowId', adminAuth, async (req, res) => {
     }
 });
 
+// NEW: Get SurePass specific analytics
+router.get('/surepass/analytics', adminAuth, async (req, res) => {
+    try {
+        const { startDate, endDate, step } = req.query;
+        
+        // Build date filter
+        const dateFilter = {};
+        if (startDate || endDate) {
+            dateFilter.timestamp = {};
+            if (startDate) dateFilter.timestamp.$gte = new Date(startDate);
+            if (endDate) dateFilter.timestamp.$lte = new Date(endDate);
+        }
+        
+        // Build query for SurePass events
+        const query = {
+            event_category: 'kyc',
+            'metadata.verification_provider': 'surepass',
+            ...dateFilter
+        };
+        
+        if (step) {
+            query.kyc_step = step;
+        }
+        
+        // Get SurePass performance metrics
+        const performanceStats = await UnifiedTrackingEvent.aggregate([
+            { $match: query },
+            {
+                $group: {
+                    _id: '$kyc_step',
+                    total_attempts: { $sum: 1 },
+                    successful_attempts: { $sum: { $cond: ['$success', 1, 0] } },
+                    avg_execution_time: { $avg: '$execution_time_ms' },
+                    min_execution_time: { $min: '$execution_time_ms' },
+                    max_execution_time: { $max: '$execution_time_ms' }
+                }
+            },
+            {
+                $addFields: {
+                    success_rate: { $divide: ['$successful_attempts', '$total_attempts'] },
+                    failure_rate: { 
+                        $divide: [
+                            { $subtract: ['$total_attempts', '$successful_attempts'] }, 
+                            '$total_attempts'
+                        ]
+                    }
+                }
+            },
+            { $sort: { total_attempts: -1 } }
+        ]);
+        
+        // Get error analysis
+        const errorAnalysis = await UnifiedTrackingEvent.aggregate([
+            { $match: { ...query, success: false } },
+            {
+                $group: {
+                    _id: '$error_message',
+                    count: { $sum: 1 },
+                    affected_steps: { $addToSet: '$kyc_step' }
+                }
+            },
+            { $sort: { count: -1 } },
+            { $limit: 10 }
+        ]);
+        
+        // Get usage trends over time
+        const usageTrends = await UnifiedTrackingEvent.aggregate([
+            { $match: query },
+            {
+                $group: {
+                    _id: {
+                        year: { $year: '$timestamp' },
+                        month: { $month: '$timestamp' },
+                        day: { $dayOfMonth: '$timestamp' },
+                        step: '$kyc_step'
+                    },
+                    count: { $sum: 1 },
+                    success_count: { $sum: { $cond: ['$success', 1, 0] } }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        year: '$_id.year',
+                        month: '$_id.month',
+                        day: '$_id.day'
+                    },
+                    steps: {
+                        $push: {
+                            step: '$_id.step',
+                            total: '$count',
+                            successful: '$success_count'
+                        }
+                    },
+                    daily_total: { $sum: '$count' }
+                }
+            },
+            { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 } }
+        ]);
+        
+        res.json({
+            success: true,
+            data: {
+                performance_stats: performanceStats,
+                error_analysis: errorAnalysis,
+                usage_trends: usageTrends,
+                date_range: { startDate, endDate },
+                step_filter: step || 'all'
+            }
+        });
+    } catch (error) {
+        console.error('Error retrieving SurePass analytics:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error retrieving SurePass analytics',
+            error: error.message
+        });
+    }
+});
+
 // LEGACY: Keep old KYC stats endpoint for backward compatibility
 router.get('/stats/kyc-completion', adminAuth, async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
         
         // Redirect to new unified stats endpoint
-        const url = `/api/tracking/stats/completion?category=kyc${startDate ? `&startDate=${startDate}` : ''}${endDate ? `&endDate=${endDate}` : ''}`;
+        console.log('⚠️ Using deprecated endpoint. Use /stats/completion?category=kyc instead.');
         
-        // For now, just call the new endpoint logic
         const dateFilter = {};
         if (startDate || endDate) {
             dateFilter.timestamp = {};
@@ -449,6 +596,46 @@ router.get('/stats/kyc-completion', adminAuth, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error retrieving KYC statistics',
+            error: error.message
+        });
+    }
+});
+
+// NEW: Manual event tracking endpoint (for testing or manual triggers)
+router.post('/manual-event', adminAuth, async (req, res) => {
+    try {
+        const { event_type, event_category, ...eventData } = req.body;
+        
+        if (!event_type || !event_category) {
+            return res.status(400).json({
+                success: false,
+                message: 'event_type and event_category are required'
+            });
+        }
+        
+        // Track the manual event
+        const result = await unifiedGtmService.trackEvent({
+            event_type,
+            event_category,
+            user_id: req.adminId, // Use admin ID as user ID for manual events
+            success: true,
+            metadata: {
+                manual_trigger: true,
+                triggered_by: req.adminId,
+                ...eventData
+            }
+        });
+        
+        res.json({
+            success: true,
+            message: 'Manual event tracked successfully',
+            data: result
+        });
+    } catch (error) {
+        console.error('Error tracking manual event:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error tracking manual event',
             error: error.message
         });
     }

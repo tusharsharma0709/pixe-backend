@@ -1,136 +1,129 @@
-// controllers/WorkflowController.js
+// controllers/WorkflowController.js - Complete implementation with SurePass integration
+
 const { Workflow } = require('../models/Workflows');
 const { Admin } = require('../models/Admins');
-const { Campaign } = require('../models/Campaigns');
-const { UserSession } = require('../models/UserSessions');
 const { ActivityLog } = require('../models/ActivityLogs');
 const { Notification } = require('../models/Notifications');
-const { Message } = require('../models/Messages');
-const axios=require('axios')
-const mongoose = require('mongoose');
-const { User } = require('../models/Users');
-const ObjectId = mongoose.Types.ObjectId;
-const whatsappService = require('../services/whatsappServices')
-// Create a message queue service
-class MessageQueue {
-    constructor() {
-        this.queue = [];
-        this.processing = false;
-        this.delay = 3000; // 3 seconds between messages
+const unifiedGtmService = require('../services/gtmTrackingServices');
+
+// SurePass endpoint mapping and validation
+const SUREPASS_ENDPOINTS = {
+    '/api/verification/aadhaar': {
+        name: 'Aadhaar Verification',
+        method: 'POST',
+        requiredParams: ['aadhaar_number'],
+        description: 'Verify Aadhaar number using SurePass API'
+    },
+    '/api/verification/aadhaar-otp': {
+        name: 'Aadhaar OTP Verification', 
+        method: 'POST',
+        requiredParams: ['client_id', 'otp'],
+        description: 'Verify Aadhaar OTP using SurePass API'
+    },
+    '/api/verification/pan': {
+        name: 'PAN Verification',
+        method: 'POST', 
+        requiredParams: ['pan_number'],
+        description: 'Verify PAN number using SurePass API'
+    },
+    '/api/verification/aadhaar-pan-link': {
+        name: 'Aadhaar-PAN Link Check',
+        method: 'POST',
+        requiredParams: ['aadhaar_number', 'pan_number'], 
+        description: 'Check if Aadhaar and PAN are linked'
+    },
+    '/api/verification/bank-account': {
+        name: 'Bank Account Verification',
+        method: 'POST',
+        requiredParams: ['account_number', 'ifsc'],
+        description: 'Verify bank account using SurePass API'
     }
-    
-    async add(phoneNumber, message) {
-        this.queue.push({ phoneNumber, message, attempts: 0 });
-        if (!this.processing) {
-            this.process();
-        }
-    }
-    
-    async process() {
-        this.processing = true;
-        
-        while (this.queue.length > 0) {
-            const item = this.queue.shift();
+};
+
+/**
+ * Validate and process SurePass API nodes in workflow
+ * @param {Array} nodes - Workflow nodes array
+ * @returns {Object} - Validation result and processed nodes
+ */
+function validateAndProcessSurePassNodes(nodes) {
+    const processedNodes = [];
+    const surePassNodes = [];
+    const validationErrors = [];
+
+    nodes.forEach((node, index) => {
+        // Check if this is an API node with SurePass endpoint
+        if (node.type === 'api' && node.apiEndpoint) {
+            const endpoint = node.apiEndpoint;
             
-            try {
-                await whatsappService.sendMessage(item.phoneNumber, item.message);
-                await new Promise(resolve => setTimeout(resolve, this.delay));
-            } catch (error) {
-                if (error.message.includes('131056') && item.attempts < 3) {
-                    console.log('Rate limit hit, requeueing with longer delay...');
-                    item.attempts++;
-                    this.queue.unshift(item); // Put back at front
-                    await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
-                } else {
-                    console.error('Failed to send message:', error);
+            // Check if it's a SurePass endpoint
+            if (SUREPASS_ENDPOINTS[endpoint]) {
+                const endpointConfig = SUREPASS_ENDPOINTS[endpoint];
+                
+                console.log(`🔍 Found SurePass endpoint in node ${node.nodeId}: ${endpoint}`);
+                
+                // Validate required parameters
+                const nodeParams = node.apiParams || {};
+                const missingParams = endpointConfig.requiredParams.filter(param => 
+                    !nodeParams[param] && !nodeParams[param.replace('_', '')] && 
+                    !nodeParams[param.replace('_', 'Number')] // Handle variations like aadhaar_number vs aadhaarNumber
+                );
+                
+                if (missingParams.length > 0) {
+                    validationErrors.push({
+                        nodeId: node.nodeId,
+                        endpoint: endpoint,
+                        missingParams: missingParams,
+                        message: `Node ${node.nodeId} missing required parameters: ${missingParams.join(', ')}`
+                    });
                 }
+                
+                // Set default HTTP method if not specified
+                if (!node.apiMethod) {
+                    node.apiMethod = endpointConfig.method;
+                }
+                
+                // Add enhanced metadata for SurePass nodes
+                node.surePassConfig = {
+                    endpointName: endpointConfig.name,
+                    description: endpointConfig.description,
+                    isKycVerification: true,
+                    verificationStep: endpoint.split('/').pop(), // Extract step name
+                    requiredParams: endpointConfig.requiredParams
+                };
+                
+                surePassNodes.push({
+                    nodeId: node.nodeId,
+                    nodeName: node.name,
+                    endpoint: endpoint,
+                    config: endpointConfig
+                });
             }
         }
         
-        this.processing = false;
-    }
+        processedNodes.push(node);
+    });
+
+    return {
+        nodes: processedNodes,
+        surePassNodes: surePassNodes,
+        validationErrors: validationErrors,
+        hasSurePassNodes: surePassNodes.length > 0
+    };
 }
-
-const messageQueue = new MessageQueue();
-
-// helpers/workflowHelpers.js
-function evaluateCondition(condition, data) {
-    try {
-        if (!condition) return false;
-        
-        // Simple evaluation - you can make this more sophisticated
-        // Example condition: "creditScore > 700"
-        const conditionRegex = /(\w+)\s*(>|<|==|!=|>=|<=)\s*(.+)/;
-        const match = condition.match(conditionRegex);
-        
-        if (!match) return false;
-        
-        const [, field, operator, value] = match;
-        const fieldValue = data[field];
-        
-        if (fieldValue === undefined) return false;
-        
-        // Convert to numbers if possible
-        const numFieldValue = Number(fieldValue);
-        const numValue = Number(value);
-        const useNumbers = !isNaN(numFieldValue) && !isNaN(numValue);
-        
-        switch (operator) {
-            case '>':
-                return useNumbers ? numFieldValue > numValue : fieldValue > value;
-            case '<':
-                return useNumbers ? numFieldValue < numValue : fieldValue < value;
-            case '>=':
-                return useNumbers ? numFieldValue >= numValue : fieldValue >= value;
-            case '<=':
-                return useNumbers ? numFieldValue <= numValue : fieldValue <= value;
-            case '==':
-                return fieldValue == value;
-            case '!=':
-                return fieldValue != value;
-            default:
-                return false;
-        }
-    } catch (error) {
-        console.error('Error evaluating condition:', error);
-        return false;
-    }
-}
-
-// Helper function to log activity
-const logActivity = async (data) => {
-    try {
-        const activityLog = new ActivityLog(data);
-        await activityLog.save();
-        return activityLog;
-    } catch (error) {
-        console.error("Error logging activity:", error);
-    }
-};
-
-// Helper function to create notification
-const createNotification = async (data) => {
-    try {
-        const notification = new Notification(data);
-        await notification.save();
-        return notification;
-    } catch (error) {
-        console.error("Error creating notification:", error);
-    }
-};
 
 const WorkflowController = {
-    // Create a new workflow
+    // Create workflow with SurePass endpoint processing
     createWorkflow: async (req, res) => {
         try {
             const {
                 name,
                 description,
+                category,
+                tags,
                 nodes,
                 startNodeId,
-                tags,
-                category,
-                isTemplate
+                isActive,
+                metadata
             } = req.body;
 
             const adminId = req.adminId;
@@ -143,130 +136,379 @@ const WorkflowController = {
                 });
             }
 
-            // Validate nodes structure
-            if (!Array.isArray(nodes) || nodes.length === 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: "At least one node is required"
-                });
-            }
-
-            // Validate that startNodeId exists in nodes
+            // Validate startNodeId exists in nodes
             const startNodeExists = nodes.some(node => node.nodeId === startNodeId);
             if (!startNodeExists) {
                 return res.status(400).json({
                     success: false,
-                    message: "Start node ID must reference an existing node"
+                    message: "startNodeId must reference an existing node"
                 });
             }
 
-            // Validate each node
-            for (const node of nodes) {
-                if (!node.nodeId || !node.name || !node.type) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Each node must have nodeId, name, and type"
-                    });
-                }
-
-                // Validate node connections
-                if (node.type === 'condition') {
-                    if (!node.condition || !node.trueNodeId || !node.falseNodeId) {
-                        return res.status(400).json({
-                            success: false,
-                            message: "Condition nodes must have condition, trueNodeId, and falseNodeId"
-                        });
-                    }
-                } else if (node.type !== 'end' && !node.nextNodeId) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Non-end nodes must have nextNodeId"
-                    });
-                }
-            }
-
-            // Check if workflow name already exists
-            const existingWorkflow = await Workflow.findOne({
-                adminId,
-                name
-            });
-
-            if (existingWorkflow) {
+            // PROCESS SUREPASS NODES: Validate and enhance SurePass API nodes
+            const surePassProcessing = validateAndProcessSurePassNodes(nodes);
+            
+            // Return validation errors for SurePass nodes if any
+            if (surePassProcessing.validationErrors.length > 0) {
+                console.log('❌ SurePass node validation errors:', surePassProcessing.validationErrors);
                 return res.status(400).json({
                     success: false,
-                    message: "A workflow with this name already exists"
+                    message: "SurePass endpoint validation failed",
+                    errors: surePassProcessing.validationErrors
                 });
             }
 
-            // Create workflow
+            // Create the workflow with processed nodes
             const workflow = new Workflow({
                 name,
                 description,
-                adminId,
-                nodes,
-                startNodeId,
-                tags: tags || [],
                 category: category || 'general',
-                isTemplate: isTemplate || false,
-                isActive: true
+                tags: tags || [],
+                nodes: surePassProcessing.nodes, // Use processed nodes
+                startNodeId,
+                adminId,
+                isActive: isActive !== undefined ? isActive : true,
+                metadata: {
+                    ...metadata,
+                    hasSurePassIntegration: surePassProcessing.hasSurePassNodes,
+                    surePassEndpoints: surePassProcessing.surePassNodes.map(n => n.endpoint),
+                    totalNodes: surePassProcessing.nodes.length,
+                    surePassNodeCount: surePassProcessing.surePassNodes.length
+                }
             });
 
             await workflow.save();
 
-            // Get admin details for logging
+            // Get admin details
             const admin = await Admin.findById(adminId);
 
-            // Log activity
-            await logActivity({
+            // AUTOMATIC TRACKING: Track workflow creation with SurePass info
+            try {
+                await unifiedGtmService.trackEvent({
+                    event_type: 'workflow_created',
+                    event_category: 'workflow_management',
+                    workflow_id: workflow._id,
+                    workflow_name: workflow.name,
+                    user_id: adminId,
+                    success: true,
+                    metadata: {
+                        workflow_category: workflow.category,
+                        workflow_tags: workflow.tags,
+                        total_nodes: workflow.nodes.length,
+                        node_types: [...new Set(workflow.nodes.map(n => n.type))],
+                        has_surepass_integration: surePassProcessing.hasSurePassNodes,
+                        surepass_endpoints: surePassProcessing.surePassNodes.map(n => n.endpoint),
+                        surepass_verification_steps: surePassProcessing.surePassNodes.map(n => n.config.name),
+                        created_by: admin ? `${admin.first_name} ${admin.last_name}` : 'Unknown Admin',
+                        is_kyc_workflow: surePassProcessing.hasSurePassNodes
+                    }
+                });
+
+                console.log(`✅ Tracked workflow creation with SurePass integration: ${workflow.name}`);
+                
+                // If SurePass nodes detected, log specific details
+                if (surePassProcessing.hasSurePassNodes) {
+                    console.log(`🔐 SurePass Integration Details:`);
+                    surePassProcessing.surePassNodes.forEach(node => {
+                        console.log(`   - Node: ${node.nodeId} | Endpoint: ${node.endpoint} | Type: ${node.config.name}`);
+                    });
+                }
+            } catch (trackingError) {
+                console.error('❌ Error tracking workflow creation:', trackingError);
+            }
+
+            // SETUP SUREPASS MONITORING: If workflow has SurePass nodes
+            if (surePassProcessing.hasSurePassNodes) {
+                try {
+                    // Pre-validate SurePass configuration
+                    const surePassConfig = {
+                        apiKey: process.env.SUREPASS_API_KEY,
+                        apiUrl: process.env.SUREPASS_API_URL || 'https://kyc-api.surepass.io/api/v1',
+                        testMode: process.env.BANK_TEST_MODE === 'true'
+                    };
+
+                    if (!surePassConfig.apiKey) {
+                        console.warn('⚠️ SUREPASS_API_KEY not configured - SurePass verification may fail');
+                        
+                        // Create a notification for admin about missing configuration
+                        await Notification.create({
+                            title: "SurePass Configuration Warning",
+                            description: `Your workflow "${workflow.name}" includes SurePass verification but API key is not configured. Please configure SUREPASS_API_KEY in environment variables.`,
+                            type: 'configuration_warning',
+                            priority: 'high',
+                            forAdmin: adminId,
+                            relatedTo: {
+                                model: 'Workflow',
+                                id: workflow._id
+                            }
+                        });
+                    } else {
+                        console.log(`✅ SurePass configuration validated for workflow: ${workflow.name}`);
+                    }
+
+                } catch (configError) {
+                    console.error('❌ Error validating SurePass configuration:', configError);
+                }
+            }
+
+            // Log admin activity
+            await ActivityLog.create({
                 actorId: adminId,
                 actorModel: 'Admins',
                 actorName: admin ? `${admin.first_name} ${admin.last_name}` : null,
-                action: 'workflow_created',
+                action: surePassProcessing.hasSurePassNodes ? 'kyc_workflow_created' : 'workflow_created',
                 entityType: 'Workflow',
                 entityId: workflow._id,
-                description: `Created workflow: ${workflow.name}`,
-                adminId
+                description: `Created ${surePassProcessing.hasSurePassNodes ? 'KYC ' : ''}workflow: ${workflow.name}${surePassProcessing.hasSurePassNodes ? ` with ${surePassProcessing.surePassNodes.length} SurePass verification steps` : ''}`,
+                adminId: adminId
+            });
+
+            // Create success notification
+            const notificationMessage = surePassProcessing.hasSurePassNodes 
+                ? `Your KYC workflow "${workflow.name}" has been created with ${surePassProcessing.surePassNodes.length} SurePass verification steps.`
+                : `Your workflow "${workflow.name}" has been created successfully.`;
+
+            await Notification.create({
+                title: "Workflow Created Successfully",
+                description: notificationMessage,
+                type: surePassProcessing.hasSurePassNodes ? 'kyc_workflow_created' : 'workflow_created',
+                priority: 'low',
+                forAdmin: adminId,
+                relatedTo: {
+                    model: 'Workflow',
+                    id: workflow._id
+                },
+                actionUrl: `/workflows/${workflow._id}`
             });
 
             return res.status(201).json({
                 success: true,
                 message: "Workflow created successfully",
-                data: workflow
+                data: {
+                    workflow,
+                    surePassIntegration: {
+                        enabled: surePassProcessing.hasSurePassNodes,
+                        endpointCount: surePassProcessing.surePassNodes.length,
+                        endpoints: surePassProcessing.surePassNodes.map(n => ({
+                            nodeId: n.nodeId,
+                            endpoint: n.endpoint,
+                            name: n.config.name
+                        }))
+                    }
+                }
             });
+
         } catch (error) {
-            console.error("Error in createWorkflow:", error);
+            console.error("Error creating workflow:", error);
+
+            // Track workflow creation failure
+            try {
+                await unifiedGtmService.trackEvent({
+                    event_type: 'workflow_creation_failed',
+                    event_category: 'workflow_management',
+                    user_id: req.adminId,
+                    success: false,
+                    error_message: error.message,
+                    metadata: {
+                        attempted_workflow_name: req.body.name || 'Unknown',
+                        error_type: error.name || 'UnknownError',
+                        had_surepass_nodes: req.body.nodes ? 
+                            req.body.nodes.some(n => n.type === 'api' && n.apiEndpoint && SUREPASS_ENDPOINTS[n.apiEndpoint]) : false
+                    }
+                });
+            } catch (trackingError) {
+                console.error('Error tracking workflow creation failure:', trackingError);
+            }
+
             return res.status(500).json({
                 success: false,
                 message: "Internal server error",
-                error: error
+                error: error.message
             });
         }
     },
 
-    // Get all workflows for an admin
-    getAdminWorkflows: async (req, res) => {
+    // Update workflow with enhanced tracking
+    updateWorkflow: async (req, res) => {
+        try {
+            const { id } = req.params;
+            const adminId = req.adminId;
+            const updateData = req.body;
+
+            // Find the workflow
+            const workflow = await Workflow.findOne({ _id: id, adminId });
+
+            if (!workflow) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Workflow not found"
+                });
+            }
+
+            // Store original data for tracking changes
+            const originalData = {
+                name: workflow.name,
+                category: workflow.category,
+                isActive: workflow.isActive,
+                nodeCount: workflow.nodes.length,
+                hasSurePassIntegration: workflow.metadata?.hasSurePassIntegration || false
+            };
+
+            // Process SurePass nodes if nodes are being updated
+            let surePassProcessing = null;
+            if (updateData.nodes) {
+                surePassProcessing = validateAndProcessSurePassNodes(updateData.nodes);
+                
+                // Return validation errors if any
+                if (surePassProcessing.validationErrors.length > 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "SurePass endpoint validation failed",
+                        errors: surePassProcessing.validationErrors
+                    });
+                }
+                
+                // Use processed nodes
+                updateData.nodes = surePassProcessing.nodes;
+                
+                // Update metadata with SurePass info
+                updateData.metadata = {
+                    ...updateData.metadata,
+                    hasSurePassIntegration: surePassProcessing.hasSurePassNodes,
+                    surePassEndpoints: surePassProcessing.surePassNodes.map(n => n.endpoint),
+                    surePassNodeCount: surePassProcessing.surePassNodes.length
+                };
+            }
+
+            // Update the workflow
+            Object.keys(updateData).forEach(key => {
+                if (updateData[key] !== undefined) {
+                    workflow[key] = updateData[key];
+                }
+            });
+
+            await workflow.save();
+
+            // Get admin details
+            const admin = await Admin.findById(adminId);
+
+            // AUTOMATIC TRACKING: Track workflow update
+            try {
+                // Determine what changed
+                const changes = [];
+                if (originalData.name !== workflow.name) changes.push('name');
+                if (originalData.category !== workflow.category) changes.push('category');
+                if (originalData.isActive !== workflow.isActive) changes.push('status');
+                if (originalData.nodeCount !== workflow.nodes.length) changes.push('nodes');
+                if (surePassProcessing && (originalData.hasSurePassIntegration !== surePassProcessing.hasSurePassNodes)) {
+                    changes.push('surepass_integration');
+                }
+
+                await unifiedGtmService.trackEvent({
+                    event_type: 'workflow_updated',
+                    event_category: 'workflow_management',
+                    workflow_id: workflow._id,
+                    workflow_name: workflow.name,
+                    user_id: adminId,
+                    success: true,
+                    metadata: {
+                        changes_made: changes,
+                        previous_name: originalData.name,
+                        current_name: workflow.name,
+                        previous_status: originalData.isActive ? 'active' : 'inactive',
+                        current_status: workflow.isActive ? 'active' : 'inactive',
+                        total_nodes: workflow.nodes.length,
+                        has_surepass_integration: workflow.metadata?.hasSurePassIntegration || false,
+                        surepass_endpoints: workflow.metadata?.surePassEndpoints || [],
+                        updated_by: admin ? `${admin.first_name} ${admin.last_name}` : 'Unknown Admin'
+                    }
+                });
+
+                console.log(`✅ Automatically tracked workflow update: ${workflow.name}`);
+            } catch (trackingError) {
+                console.error('❌ Error tracking workflow update:', trackingError);
+            }
+
+            // Log activity
+            await ActivityLog.create({
+                actorId: adminId,
+                actorModel: 'Admins',
+                actorName: admin ? `${admin.first_name} ${admin.last_name}` : null,
+                action: 'workflow_updated',
+                entityType: 'Workflow',
+                entityId: workflow._id,
+                description: `Updated workflow: ${workflow.name}`,
+                adminId: adminId
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: "Workflow updated successfully",
+                data: {
+                    workflow,
+                    surePassIntegration: surePassProcessing ? {
+                        enabled: surePassProcessing.hasSurePassNodes,
+                        endpointCount: surePassProcessing.surePassNodes.length,
+                        endpoints: surePassProcessing.surePassNodes.map(n => ({
+                            nodeId: n.nodeId,
+                            endpoint: n.endpoint,
+                            name: n.config.name
+                        }))
+                    } : null
+                }
+            });
+
+        } catch (error) {
+            console.error("Error updating workflow:", error);
+
+            // Track workflow update failure
+            try {
+                await unifiedGtmService.trackEvent({
+                    event_type: 'workflow_update_failed',
+                    event_category: 'workflow_management',
+                    workflow_id: req.params.id,
+                    user_id: req.adminId,
+                    success: false,
+                    error_message: error.message,
+                    metadata: {
+                        error_type: error.name || 'UnknownError'
+                    }
+                });
+            } catch (trackingError) {
+                console.error('Error tracking workflow update failure:', trackingError);
+            }
+
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
+    // Get workflows with enhanced filtering
+    getWorkflows: async (req, res) => {
         try {
             const adminId = req.adminId;
-            const {
-                isActive,
-                isTemplate,
-                category,
+            const { 
+                category, 
+                isActive, 
+                hasSurePassIntegration,
                 search,
-                tags,
-                sortBy,
-                sortOrder,
+                sortBy = 'createdAt',
+                sortOrder = 'desc',
                 page = 1,
                 limit = 10
             } = req.query;
 
             // Build query
             const query = { adminId };
-
-            if (typeof isActive === 'boolean') query.isActive = isActive;
-            if (typeof isTemplate === 'boolean') query.isTemplate = isTemplate;
+            
             if (category) query.category = category;
-            if (tags) query.tags = { $in: Array.isArray(tags) ? tags : [tags] };
-
+            if (isActive !== undefined) query.isActive = isActive === 'true';
+            if (hasSurePassIntegration !== undefined) {
+                query['metadata.hasSurePassIntegration'] = hasSurePassIntegration === 'true';
+            }
             if (search) {
                 query.$or = [
                     { name: { $regex: search, $options: 'i' } },
@@ -276,11 +518,7 @@ const WorkflowController = {
 
             // Build sort options
             const sortOptions = {};
-            if (sortBy) {
-                sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
-            } else {
-                sortOptions.createdAt = -1; // Default to newest first
-            }
+            sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
 
             // Calculate pagination
             const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -288,105 +526,28 @@ const WorkflowController = {
             // Get total count
             const totalCount = await Workflow.countDocuments(query);
 
-            // Execute query with pagination
+            // Execute query
             const workflows = await Workflow.find(query)
                 .sort(sortOptions)
                 .skip(skip)
-                .limit(parseInt(limit));
-
-            // Get usage statistics for each workflow
-            const workflowsWithStats = await Promise.all(
-                workflows.map(async (workflow) => {
-                    const sessionCount = await UserSession.countDocuments({
-                        workflowId: workflow._id
-                    });
-
-                    const campaignCount = await Campaign.countDocuments({
-                        workflowId: workflow._id
-                    });
-
-                    return {
-                        ...workflow.toObject(),
-                        usage: {
-                            sessionCount,
-                            campaignCount
-                        }
-                    };
-                })
-            );
-
-            return res.status(200).json({
-                success: true,
-                data: workflowsWithStats,
-                pagination: {
-                    totalRecords: totalCount,
-                    currentPage: parseInt(page),
-                    totalPages: Math.ceil(totalCount / parseInt(limit)),
-                    limit: parseInt(limit)
-                }
-            });
-        } catch (error) {
-            console.error("Error in getAdminWorkflows:", error);
-            return res.status(500).json({
-                success: false,
-                message: "Internal server error",
-                error: error.message
-            });
-        }
-    },
-
-    // Get workflow by ID
-    getWorkflow: async (req, res) => {
-        try {
-            const { id } = req.params;
-
-            const workflow = await Workflow.findById(id);
-
-            if (!workflow) {
-                return res.status(404).json({
-                    success: false,
-                    message: "Workflow not found"
-                });
-            }
-
-            // Check permissions
-            if (workflow.adminId.toString() !== req.adminId) {
-                return res.status(403).json({
-                    success: false,
-                    message: "You don't have permission to view this workflow"
-                });
-            }
-
-            // Get usage statistics
-            const sessionCount = await UserSession.countDocuments({
-                workflowId: workflow._id
-            });
-
-            const campaignCount = await Campaign.countDocuments({
-                workflowId: workflow._id
-            });
-
-            // Get recent sessions using this workflow
-            const recentSessions = await UserSession.find({
-                workflowId: workflow._id
-            })
-            .populate('userId', 'name phone')
-            .sort({ createdAt: -1 })
-            .limit(5);
+                .limit(parseInt(limit))
+                .select('-nodes'); // Exclude nodes for list view
 
             return res.status(200).json({
                 success: true,
                 data: {
-                    workflow: workflow.toObject(),
-                    usage: {
-                        sessionCount,
-                        campaignCount
-                    },
-                    recentSessions
+                    workflows,
+                    pagination: {
+                        totalRecords: totalCount,
+                        currentPage: parseInt(page),
+                        totalPages: Math.ceil(totalCount / parseInt(limit)),
+                        limit: parseInt(limit)
+                    }
                 }
             });
+
         } catch (error) {
-            console.error("Error in getWorkflow:", error);
+            console.error("Error getting workflows:", error);
             return res.status(500).json({
                 success: false,
                 message: "Internal server error",
@@ -395,21 +556,13 @@ const WorkflowController = {
         }
     },
 
-    // Update workflow
-    updateWorkflow: async (req, res) => {
+    // Get single workflow with full details
+    getWorkflow: async (req, res) => {
         try {
             const { id } = req.params;
-            const {
-                name,
-                description,
-                nodes,
-                startNodeId,
-                tags,
-                category,
-                isActive
-            } = req.body;
+            const adminId = req.adminId;
 
-            const workflow = await Workflow.findById(id);
+            const workflow = await Workflow.findOne({ _id: id, adminId });
 
             if (!workflow) {
                 return res.status(404).json({
@@ -418,114 +571,29 @@ const WorkflowController = {
                 });
             }
 
-            // Check permissions
-            if (workflow.adminId.toString() !== req.adminId) {
-                return res.status(403).json({
-                    success: false,
-                    message: "You don't have permission to update this workflow"
-                });
-            }
-
-            // If nodes are being updated, validate them
-            if (nodes) {
-                if (!Array.isArray(nodes) || nodes.length === 0) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "At least one node is required"
-                    });
-                }
-
-                // Validate each node
-                for (const node of nodes) {
-                    if (!node.nodeId || !node.name || !node.type) {
-                        return res.status(400).json({
-                            success: false,
-                            message: "Each node must have nodeId, name, and type"
-                        });
-                    }
-                }
-            }
-
-            // If startNodeId is being updated, validate it exists in nodes
-            if (startNodeId && nodes) {
-                const startNodeExists = nodes.some(node => node.nodeId === startNodeId);
-                if (!startNodeExists) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Start node ID must reference an existing node"
-                    });
-                }
-            }
-
-            // Check if name is being changed to an existing name
-            if (name && name !== workflow.name) {
-                const existingWorkflow = await Workflow.findOne({
-                    adminId: workflow.adminId,
-                    name,
-                    _id: { $ne: workflow._id }
-                });
-
-                if (existingWorkflow) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "A workflow with this name already exists"
-                    });
-                }
-            }
-
-            // Check if workflow is in use before making major changes
-            if (nodes || startNodeId) {
-                const activeSessionCount = await UserSession.countDocuments({
-                    workflowId: workflow._id,
-                    status: 'active'
-                });
-
-                if (activeSessionCount > 0) {
-                    return res.status(400).json({
-                        success: false,
-                        message: `Cannot update workflow structure while ${activeSessionCount} active sessions are using it`
-                    });
-                }
-            }
-
-            // Update workflow version when nodes change
-            if (nodes) {
-                workflow.version = workflow.version + 1;
-            }
-
-            // Update workflow fields
-            if (name) workflow.name = name;
-            if (description !== undefined) workflow.description = description;
-            if (nodes) workflow.nodes = nodes;
-            if (startNodeId) workflow.startNodeId = startNodeId;
-            if (tags) workflow.tags = tags;
-            if (category) workflow.category = category;
-            if (typeof isActive === 'boolean') workflow.isActive = isActive;
-
-            await workflow.save();
-
-            // Get admin details for logging
-            const admin = await Admin.findById(req.adminId);
-
-            // Log activity
-            await logActivity({
-                actorId: req.adminId,
-                actorModel: 'Admins',
-                actorName: admin ? `${admin.first_name} ${admin.last_name}` : null,
-                action: 'workflow_updated',
-                entityType: 'Workflow',
-                entityId: workflow._id,
-                description: `Updated workflow: ${workflow.name}`,
-                adminId: workflow.adminId
-            });
+            // Analyze SurePass integration
+            const surePassAnalysis = validateAndProcessSurePassNodes(workflow.nodes);
 
             return res.status(200).json({
                 success: true,
-                message: "Workflow updated successfully",
-                data: workflow
+                data: {
+                    workflow,
+                    surePassIntegration: {
+                        enabled: surePassAnalysis.hasSurePassNodes,
+                        endpointCount: surePassAnalysis.surePassNodes.length,
+                        endpoints: surePassAnalysis.surePassNodes.map(n => ({
+                            nodeId: n.nodeId,
+                            endpoint: n.endpoint,
+                            name: n.config.name,
+                            description: n.config.description
+                        })),
+                        validationErrors: surePassAnalysis.validationErrors
+                    }
+                }
             });
+
         } catch (error) {
-            console.error("Error in updateWorkflow:", error);
+            console.error("Error getting workflow:", error);
             return res.status(500).json({
                 success: false,
                 message: "Internal server error",
@@ -534,12 +602,13 @@ const WorkflowController = {
         }
     },
 
-    // Delete workflow
+    // Delete workflow with tracking
     deleteWorkflow: async (req, res) => {
         try {
             const { id } = req.params;
+            const adminId = req.adminId;
 
-            const workflow = await Workflow.findById(id);
+            const workflow = await Workflow.findOne({ _id: id, adminId });
 
             if (!workflow) {
                 return res.status(404).json({
@@ -548,54 +617,327 @@ const WorkflowController = {
                 });
             }
 
-            // Check permissions
-            if (workflow.adminId.toString() !== req.adminId) {
-                return res.status(403).json({
-                    success: false,
-                    message: "You don't have permission to delete this workflow"
-                });
-            }
-
-            // Check if workflow is in use
-            const sessionCount = await UserSession.countDocuments({
-                workflowId: workflow._id
+            // Check if workflow is being used in active sessions
+            const { UserSession } = require('../models/UserSessions');
+            const activeSessionsCount = await UserSession.countDocuments({
+                workflowId: id,
+                status: 'active'
             });
 
-            const campaignCount = await Campaign.countDocuments({
-                workflowId: workflow._id
-            });
-
-            if (sessionCount > 0 || campaignCount > 0) {
+            if (activeSessionsCount > 0) {
                 return res.status(400).json({
                     success: false,
-                    message: `Cannot delete workflow used by ${sessionCount} sessions and ${campaignCount} campaigns`
+                    message: `Cannot delete workflow. It has ${activeSessionsCount} active sessions.`
                 });
             }
 
-            // Delete the workflow
-            await Workflow.findByIdAndDelete(id);
+            // Store workflow info for tracking
+            const workflowInfo = {
+                name: workflow.name,
+                category: workflow.category,
+                totalNodes: workflow.nodes.length,
+                hasSurePassIntegration: workflow.metadata?.hasSurePassIntegration || false,
+                surePassEndpoints: workflow.metadata?.surePassEndpoints || []
+            };
 
-            // Get admin details for logging
-            const admin = await Admin.findById(req.adminId);
+            await workflow.deleteOne();
+
+            // Get admin details
+            const admin = await Admin.findById(adminId);
+
+            // Track workflow deletion
+            try {
+                await unifiedGtmService.trackEvent({
+                    event_type: 'workflow_deleted',
+                    event_category: 'workflow_management',
+                    workflow_id: id,
+                    workflow_name: workflowInfo.name,
+                    user_id: adminId,
+                    success: true,
+                    metadata: {
+                        ...workflowInfo,
+                        deleted_by: admin ? `${admin.first_name} ${admin.last_name}` : 'Unknown Admin'
+                    }
+                });
+            } catch (trackingError) {
+                console.error('Error tracking workflow deletion:', trackingError);
+            }
 
             // Log activity
-            await logActivity({
-                actorId: req.adminId,
+            await ActivityLog.create({
+                actorId: adminId,
                 actorModel: 'Admins',
                 actorName: admin ? `${admin.first_name} ${admin.last_name}` : null,
                 action: 'workflow_deleted',
                 entityType: 'Workflow',
-                entityId: workflow._id,
-                description: `Deleted workflow: ${workflow.name}`,
-                adminId: workflow.adminId
+                entityId: id,
+                description: `Deleted workflow: ${workflowInfo.name}`,
+                adminId: adminId
             });
 
             return res.status(200).json({
                 success: true,
                 message: "Workflow deleted successfully"
             });
+
         } catch (error) {
-            console.error("Error in deleteWorkflow:", error);
+            console.error("Error deleting workflow:", error);
+
+            // Track workflow deletion failure
+            try {
+                await unifiedGtmService.trackEvent({
+                    event_type: 'workflow_deletion_failed',
+                    event_category: 'workflow_management',
+                    workflow_id: req.params.id,
+                    user_id: req.adminId,
+                    success: false,
+                    error_message: error.message
+                });
+            } catch (trackingError) {
+                console.error('Error tracking workflow deletion failure:', trackingError);
+            }
+
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
+    // Get admin workflows (enhanced with SurePass filtering) - matches your route
+    getAdminWorkflows: async (req, res) => {
+        try {
+            const adminId = req.adminId;
+            const { 
+                category, 
+                isActive, 
+                hasSurePassIntegration,
+                search,
+                sortBy = 'createdAt',
+                sortOrder = 'desc',
+                page = 1,
+                limit = 10
+            } = req.query;
+
+            // Build query
+            const query = { adminId };
+            
+            if (category) query.category = category;
+            if (isActive !== undefined) query.isActive = isActive === 'true';
+            if (hasSurePassIntegration !== undefined) {
+                query['metadata.hasSurePassIntegration'] = hasSurePassIntegration === 'true';
+            }
+            if (search) {
+                query.$or = [
+                    { name: { $regex: search, $options: 'i' } },
+                    { description: { $regex: search, $options: 'i' } }
+                ];
+            }
+
+            // Build sort options
+            const sortOptions = {};
+            sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+            // Calculate pagination
+            const skip = (parseInt(page) - 1) * parseInt(limit);
+
+            // Get total count
+            const totalCount = await Workflow.countDocuments(query);
+
+            // Execute query
+            const workflows = await Workflow.find(query)
+                .sort(sortOptions)
+                .skip(skip)
+                .limit(parseInt(limit))
+                .select('-nodes'); // Exclude nodes for list view
+
+            // Add SurePass integration summary for each workflow
+            const workflowsWithSurePassInfo = workflows.map(workflow => {
+                const workflowObj = workflow.toObject();
+                workflowObj.surePassSummary = {
+                    hasIntegration: workflow.metadata?.hasSurePassIntegration || false,
+                    endpointCount: workflow.metadata?.surePassNodeCount || 0,
+                    endpoints: workflow.metadata?.surePassEndpoints || []
+                };
+                return workflowObj;
+            });
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    workflows: workflowsWithSurePassInfo,
+                    pagination: {
+                        totalRecords: totalCount,
+                        currentPage: parseInt(page),
+                        totalPages: Math.ceil(totalCount / parseInt(limit)),
+                        limit: parseInt(limit)
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error("Error getting admin workflows:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
+    // Get workflow templates
+    getWorkflowTemplates: async (req, res) => {
+        try {
+            // You can create pre-defined templates here or fetch from database
+            const templates = [
+                {
+                    id: 'kyc_basic',
+                    name: 'Basic KYC Verification',
+                    description: 'Complete KYC workflow with Aadhaar, PAN, and Bank verification',
+                    category: 'kyc',
+                    hasSurePassIntegration: true,
+                    surePassEndpoints: [
+                        '/api/verification/aadhaar',
+                        '/api/verification/pan',
+                        '/api/verification/bank-account'
+                    ],
+                    estimatedNodes: 12
+                },
+                {
+                    id: 'property_sales',
+                    name: 'Property Sales Workflow',
+                    description: 'Guide customers through property information and booking',
+                    category: 'sales',
+                    hasSurePassIntegration: false,
+                    surePassEndpoints: [],
+                    estimatedNodes: 8
+                },
+                {
+                    id: 'loan_application',
+                    name: 'Loan Application Process',
+                    description: 'Complete loan application with KYC verification',
+                    category: 'finance',
+                    hasSurePassIntegration: true,
+                    surePassEndpoints: [
+                        '/api/verification/aadhaar',
+                        '/api/verification/pan',
+                        '/api/verification/aadhaar-pan-link'
+                    ],
+                    estimatedNodes: 15
+                }
+            ];
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    templates,
+                    availableSurePassEndpoints: Object.keys(SUREPASS_ENDPOINTS)
+                }
+            });
+
+        } catch (error) {
+            console.error("Error getting workflow templates:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
+    // Get available SurePass endpoints (helper for frontend)
+    getSurePassEndpoints: async (req, res) => {
+        try {
+            const endpoints = Object.keys(SUREPASS_ENDPOINTS).map(endpoint => ({
+                endpoint,
+                ...SUREPASS_ENDPOINTS[endpoint]
+            }));
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    endpoints,
+                    totalEndpoints: endpoints.length,
+                    configured: !!process.env.SUREPASS_API_KEY,
+                    apiUrl: process.env.SUREPASS_API_URL || 'https://kyc-api.surepass.io/api/v1',
+                    testMode: process.env.BANK_TEST_MODE === 'true'
+                }
+            });
+        } catch (error) {
+            console.error("Error getting SurePass endpoints:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
+    },
+
+    // Validate SurePass node configuration (helper endpoint)
+    validateSurePassNode: async (req, res) => {
+        try {
+            const { apiEndpoint, apiParams, nodeId } = req.body;
+
+            if (!apiEndpoint) {
+                return res.status(400).json({
+                    success: false,
+                    message: "apiEndpoint is required"
+                });
+            }
+
+            const endpointConfig = SUREPASS_ENDPOINTS[apiEndpoint];
+            if (!endpointConfig) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid SurePass endpoint",
+                    availableEndpoints: Object.keys(SUREPASS_ENDPOINTS)
+                });
+            }
+
+            // Validate parameters
+            const nodeParams = apiParams || {};
+            const missingParams = endpointConfig.requiredParams.filter(param => 
+                !nodeParams[param] && 
+                !nodeParams[param.replace('_', '')] &&
+                !nodeParams[param.replace('_', 'Number')]
+            );
+
+            const isValid = missingParams.length === 0;
+
+            // Suggest parameter mapping if needed
+            const parameterSuggestions = {};
+            if (!isValid) {
+                endpointConfig.requiredParams.forEach(param => {
+                    parameterSuggestions[param] = {
+                        examples: [
+                            `{{${param}}}`,
+                            `{{${param.replace('_', '')}}}`,
+                            `{{${param.replace('_', 'Number')}}}`,
+                            `{{user_${param}}}`
+                        ],
+                        description: `Parameter for ${param.replace('_', ' ')}`
+                    };
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    nodeId,
+                    endpoint: apiEndpoint,
+                    endpointName: endpointConfig.name,
+                    isValid,
+                    missingParams,
+                    requiredParams: endpointConfig.requiredParams,
+                    description: endpointConfig.description,
+                    method: endpointConfig.method,
+                    parameterSuggestions: !isValid ? parameterSuggestions : null
+                }
+            });
+
+        } catch (error) {
+            console.error("Error validating SurePass node:", error);
             return res.status(500).json({
                 success: false,
                 message: "Internal server error",
@@ -608,149 +950,65 @@ const WorkflowController = {
     cloneWorkflow: async (req, res) => {
         try {
             const { id } = req.params;
-            const { name, description } = req.body;
+            const adminId = req.adminId;
+            const { name: newName } = req.body;
 
-            if (!name) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Name is required for cloned workflow"
-                });
-            }
+            // Find the workflow to clone
+            const originalWorkflow = await Workflow.findOne({ _id: id, adminId });
 
-            const sourceWorkflow = await Workflow.findById(id);
-
-            if (!sourceWorkflow) {
+            if (!originalWorkflow) {
                 return res.status(404).json({
                     success: false,
-                    message: "Source workflow not found"
-                });
-            }
-
-            // Check permissions
-            if (sourceWorkflow.adminId.toString() !== req.adminId) {
-                return res.status(403).json({
-                    success: false,
-                    message: "You don't have permission to clone this workflow"
-                });
-            }
-
-            // Check if new name already exists
-            const existingWorkflow = await Workflow.findOne({
-                adminId: req.adminId,
-                name
-            });
-
-            if (existingWorkflow) {
-                return res.status(400).json({
-                    success: false,
-                    message: "A workflow with this name already exists"
+                    message: "Workflow not found"
                 });
             }
 
             // Create cloned workflow
             const clonedWorkflow = new Workflow({
-                name,
-                description: description || `Clone of ${sourceWorkflow.name}`,
-                adminId: req.adminId,
-                nodes: sourceWorkflow.nodes,
-                startNodeId: sourceWorkflow.startNodeId,
-                tags: sourceWorkflow.tags,
-                category: sourceWorkflow.category,
-                isTemplate: false,
-                isActive: true,
-                version: 1
+                name: newName || `${originalWorkflow.name} (Copy)`,
+                description: originalWorkflow.description,
+                category: originalWorkflow.category,
+                tags: [...originalWorkflow.tags],
+                nodes: originalWorkflow.nodes.map(node => ({ ...node })), // Deep copy nodes
+                startNodeId: originalWorkflow.startNodeId,
+                adminId,
+                isActive: false, // Start as inactive
+                metadata: { ...originalWorkflow.metadata }
             });
 
             await clonedWorkflow.save();
 
-            // Get admin details for logging
-            const admin = await Admin.findById(req.adminId);
+            // Get admin details
+            const admin = await Admin.findById(adminId);
 
-            // Log activity
-            await logActivity({
-                actorId: req.adminId,
-                actorModel: 'Admins',
-                actorName: admin ? `${admin.first_name} ${admin.last_name}` : null,
-                action: 'workflow_created',
-                entityType: 'Workflow',
-                entityId: clonedWorkflow._id,
-                description: `Cloned workflow: ${clonedWorkflow.name} from ${sourceWorkflow.name}`,
-                adminId: req.adminId
-            });
+            // Track workflow cloning
+            try {
+                await unifiedGtmService.trackEvent({
+                    event_type: 'workflow_cloned',
+                    event_category: 'workflow_management',
+                    workflow_id: clonedWorkflow._id,
+                    workflow_name: clonedWorkflow.name,
+                    user_id: adminId,
+                    success: true,
+                    metadata: {
+                        original_workflow_id: originalWorkflow._id,
+                        original_workflow_name: originalWorkflow.name,
+                        has_surepass_integration: clonedWorkflow.metadata?.hasSurePassIntegration || false,
+                        cloned_by: admin ? `${admin.first_name} ${admin.last_name}` : 'Unknown Admin'
+                    }
+                });
+            } catch (trackingError) {
+                console.error('Error tracking workflow cloning:', trackingError);
+            }
 
             return res.status(201).json({
                 success: true,
                 message: "Workflow cloned successfully",
                 data: clonedWorkflow
             });
+
         } catch (error) {
-            console.error("Error in cloneWorkflow:", error);
-            return res.status(500).json({
-                success: false,
-                message: "Internal server error",
-                error: error.message
-            });
-        }
-    },
-
-    // Get workflow templates
-    getWorkflowTemplates: async (req, res) => {
-        try {
-            const {
-                category,
-                search,
-                tags,
-                sortBy,
-                sortOrder,
-                page = 1,
-                limit = 10
-            } = req.query;
-
-            // Build query for templates
-            const query = { isTemplate: true };
-
-            if (category) query.category = category;
-            if (tags) query.tags = { $in: Array.isArray(tags) ? tags : [tags] };
-
-            if (search) {
-                query.$or = [
-                    { name: { $regex: search, $options: 'i' } },
-                    { description: { $regex: search, $options: 'i' } }
-                ];
-            }
-
-            // Build sort options
-            const sortOptions = {};
-            if (sortBy) {
-                sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
-            } else {
-                sortOptions.createdAt = -1;
-            }
-
-            // Calculate pagination
-            const skip = (parseInt(page) - 1) * parseInt(limit);
-
-            // Get total count
-            const totalCount = await Workflow.countDocuments(query);
-
-            // Execute query with pagination
-            const templates = await Workflow.find(query)
-                .sort(sortOptions)
-                .skip(skip)
-                .limit(parseInt(limit));
-
-            return res.status(200).json({
-                success: true,
-                data: templates,
-                pagination: {
-                    totalRecords: totalCount,
-                    currentPage: parseInt(page),
-                    totalPages: Math.ceil(totalCount / parseInt(limit)),
-                    limit: parseInt(limit)
-                }
-            });
-        } catch (error) {
-            console.error("Error in getWorkflowTemplates:", error);
+            console.error("Error cloning workflow:", error);
             return res.status(500).json({
                 success: false,
                 message: "Internal server error",
@@ -763,298 +1021,100 @@ const WorkflowController = {
     testWorkflow: async (req, res) => {
         try {
             const { id } = req.params;
-            const { testData, phoneNumber, sendMessages = false, interactiveMode = false } = req.body;
-    
-            if (!phoneNumber) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Phone number is required for testing"
-                });
-            }
-    
-            const workflow = await Workflow.findById(id);
-    
+            const adminId = req.adminId;
+            const { testData = {} } = req.body;
+
+            const workflow = await Workflow.findOne({ _id: id, adminId });
+
             if (!workflow) {
                 return res.status(404).json({
                     success: false,
                     message: "Workflow not found"
                 });
             }
-    
-            // Check permissions
-            if (workflow.adminId.toString() !== req.adminId) {
-                return res.status(403).json({
+
+            // Validate workflow structure
+            const validation = validateAndProcessSurePassNodes(workflow.nodes);
+            
+            // Check for validation errors
+            if (validation.validationErrors.length > 0) {
+                return res.status(400).json({
                     success: false,
-                    message: "You don't have permission to test this workflow"
+                    message: "Workflow validation failed",
+                    errors: validation.validationErrors
                 });
             }
-    
-            // Interactive mode - create real session for conversation flow
-            if (interactiveMode && sendMessages) {
-                // Import required models
-                const { User } = require('../models/Users');
-                const { UserSession } = require('../models/UserSessions');
-                
-                // Find or create user
-                let user = await User.findOne({ phone: phoneNumber });
-                if (!user) {
-                    user = new User({
-                        phone: phoneNumber,
-                        adminId: workflow.adminId,
-                        workflowId: workflow._id,
-                        status: 'active',
-                        source: 'whatsapp'  // Changed to valid source
-                    });
-                    await user.save();
+
+            // Simulate workflow execution
+            const testResult = {
+                workflow_id: workflow._id,
+                workflow_name: workflow.name,
+                test_status: 'success',
+                total_nodes: workflow.nodes.length,
+                surepass_integration: {
+                    enabled: validation.hasSurePassNodes,
+                    endpoints: validation.surePassNodes.map(n => n.endpoint)
+                },
+                node_validations: [],
+                estimated_execution_path: []
+            };
+
+            // Validate each node
+            workflow.nodes.forEach((node, index) => {
+                const nodeValidation = {
+                    node_id: node.nodeId,
+                    node_name: node.name,
+                    node_type: node.type,
+                    status: 'valid',
+                    issues: []
+                };
+
+                // Check for common issues
+                if (node.type === 'condition' && !node.condition) {
+                    nodeValidation.status = 'error';
+                    nodeValidation.issues.push('Missing condition expression');
                 }
-    
-                // Check if there's already an active session
-                let existingSession = await UserSession.findOne({
-                    userId: user._id,
-                    status: 'active',
-                    workflowId: workflow._id
-                });
-    
-                if (existingSession) {
-                    return res.status(200).json({
-                        success: true,
-                        message: "Active session already exists",
-                        data: {
-                            sessionId: existingSession._id,
-                            userId: user._id,
-                            currentNodeId: existingSession.currentNodeId,
-                            instructions: "Use webhook endpoint to send user messages"
-                        }
-                    });
+
+                if (node.type === 'api' && !node.apiEndpoint) {
+                    nodeValidation.status = 'error';
+                    nodeValidation.issues.push('Missing API endpoint');
                 }
-    
-                // Create new session
-                const session = new UserSession({
-                    userId: user._id,
-                    phone: phoneNumber,
-                    workflowId: workflow._id,
-                    adminId: workflow.adminId,
-                    currentNodeId: workflow.startNodeId,
-                    data: testData || {},
-                    status: 'active',
-                    source: 'whatsapp'
-                });
-                await session.save();
-    
-                // Execute the workflow
-                const { executeWorkflowNode } = require('../services/workflowExecutor');
-                await executeWorkflowNode(session, workflow.startNodeId);
-    
-                return res.status(200).json({
+
+                if ((node.type === 'input' || node.type === 'interactive') && !node.variableName) {
+                    nodeValidation.status = 'warning';
+                    nodeValidation.issues.push('Missing variable name');
+                }
+
+                testResult.node_validations.push(nodeValidation);
+            });
+
+            // Track workflow test
+            try {
+                await unifiedGtmService.trackEvent({
+                    event_type: 'workflow_tested',
+                    event_category: 'workflow_management',
+                    workflow_id: workflow._id,
+                    workflow_name: workflow.name,
+                    user_id: adminId,
                     success: true,
-                    message: "Interactive workflow test started",
-                    data: {
-                        sessionId: session._id,
-                        userId: user._id,
-                        currentNodeId: session.currentNodeId,
-                        webhook: "/api/message/webhook/receive",
-                        instructions: "Messages have been sent to WhatsApp. Send user responses to the webhook endpoint."
+                    metadata: {
+                        test_result: testResult.test_status,
+                        validation_errors: validation.validationErrors.length,
+                        has_surepass_integration: validation.hasSurePassNodes
                     }
                 });
+            } catch (trackingError) {
+                console.error('Error tracking workflow test:', trackingError);
             }
-    
-            // Non-interactive mode - simulate full workflow
-            const testResults = [];
-            let currentNodeId = workflow.startNodeId;
-            let testSession = { data: testData || {} };
-            let stepCount = 0;
-            const maxSteps = 100;
-            let messagesSent = 0;
-            const maxMessagesPerMinute = 10;
-            const messageStartTime = Date.now();
-    
-            while (currentNodeId && stepCount < maxSteps) {
-                const currentNode = workflow.nodes.find(node => node.nodeId === currentNodeId);
-                
-                if (!currentNode) {
-                    testResults.push({
-                        step: stepCount,
-                        nodeId: currentNodeId,
-                        error: "Node not found"
-                    });
-                    break;
-                }
-    
-                const result = {
-                    step: stepCount,
-                    nodeId: currentNodeId,
-                    nodeName: currentNode.name,
-                    nodeType: currentNode.type,
-                    data: { ...testSession.data }
-                };
-    
-                // Execute node based on type
-                switch (currentNode.type) {
-                    case 'message':
-                        result.output = currentNode.content;
-                        
-                        // Send actual WhatsApp message with rate limiting
-                        if (sendMessages && currentNode.content) {
-                            try {
-                                // Check rate limits
-                                const elapsedMinutes = (Date.now() - messageStartTime) / 60000;
-                                if (messagesSent >= maxMessagesPerMinute && elapsedMinutes < 1) {
-                                    const waitTime = (1 - elapsedMinutes) * 60000;
-                                    console.log(`Rate limit approaching, waiting ${Math.ceil(waitTime/1000)} seconds...`);
-                                    await new Promise(resolve => setTimeout(resolve, waitTime));
-                                }
-    
-                                // Replace variables in message content
-                                let messageContent = currentNode.content;
-                                for (const [key, value] of Object.entries(testSession.data)) {
-                                    messageContent = messageContent.replace(new RegExp(`{{${key}}}`, 'g'), value);
-                                }
-                                
-                                // Send message via WhatsApp
-                                const messageResult = await whatsappService.sendMessage(
-                                    phoneNumber, 
-                                    messageContent
-                                );
-                                
-                                result.messageSent = true;
-                                result.messageId = messageResult.message_id;
-                                result.actualMessage = messageContent;
-                                messagesSent++;
-                                
-                                // Wait between messages to avoid rate limits
-                                await new Promise(resolve => setTimeout(resolve, 3000)); // 3 second delay
-                                
-                            } catch (sendError) {
-                                console.error('Error sending message:', sendError);
-                                result.messageSent = false;
-                                result.sendError = sendError.response?.data?.error?.message || sendError.message;
-                                
-                                // If rate limit error, wait longer
-                                if (sendError.message?.includes('131056')) {
-                                    console.log('Rate limit hit, waiting 30 seconds...');
-                                    await new Promise(resolve => setTimeout(resolve, 30000));
-                                }
-                            }
-                        } else {
-                            result.messageSent = false;
-                            result.reason = sendMessages ? "No content to send" : "Message sending disabled";
-                        }
-                        
-                        currentNodeId = currentNode.nextNodeId;
-                        break;
-    
-                    case 'input':
-                        result.output = `Waiting for input: ${currentNode.variableName}`;
-                        
-                        // Send input prompt message if content exists
-                        if (sendMessages && currentNode.content) {
-                            try {
-                                // Rate limit check
-                                if (messagesSent >= maxMessagesPerMinute) {
-                                    await new Promise(resolve => setTimeout(resolve, 60000));
-                                    messagesSent = 0;
-                                }
-    
-                                const messageResult = await whatsappService.sendMessage(
-                                    phoneNumber, 
-                                    currentNode.content
-                                );
-                                result.promptSent = true;
-                                result.messageId = messageResult.message_id;
-                                messagesSent++;
-                                
-                                await new Promise(resolve => setTimeout(resolve, 3000));
-                            } catch (sendError) {
-                                result.promptSent = false;
-                                result.sendError = sendError.response?.data?.error?.message || sendError.message;
-                            }
-                        }
-                        
-                        // For testing, use provided test data
-                        if (testData && testData[currentNode.variableName]) {
-                            testSession.data[currentNode.variableName] = testData[currentNode.variableName];
-                            result.collectedData = { [currentNode.variableName]: testData[currentNode.variableName] };
-                        } else {
-                            result.output += " (No test data provided, skipping)";
-                        }
-                        
-                        currentNodeId = currentNode.nextNodeId;
-                        break;
-    
-                    case 'condition':
-                        // Evaluate condition
-                        const conditionResult = evaluateCondition(
-                            currentNode.condition, 
-                            testSession.data
-                        );
-                        result.conditionResult = conditionResult;
-                        result.evaluatedCondition = currentNode.condition;
-                        currentNodeId = conditionResult ? currentNode.trueNodeId : currentNode.falseNodeId;
-                        break;
-    
-                    case 'api':
-                        result.output = `API call to: ${currentNode.apiEndpoint}`;
-                        
-                        // Make actual API call if enabled and endpoint exists
-                        if (sendMessages && currentNode.apiEndpoint) {
-                            try {
-                                const axios = require('axios');
-                                const apiResponse = await axios({
-                                    method: currentNode.apiMethod || 'GET',
-                                    url: currentNode.apiEndpoint,
-                                    data: currentNode.apiParams || {},
-                                    timeout: 10000
-                                });
-                                result.apiResponse = apiResponse.data;
-                                result.apiStatus = apiResponse.status;
-                            } catch (apiError) {
-                                result.apiError = apiError.message;
-                                result.apiStatus = apiError.response?.status;
-                            }
-                        }
-                        
-                        currentNodeId = currentNode.nextNodeId;
-                        break;
-    
-                    default:
-                        result.output = `Node type: ${currentNode.type}`;
-                        currentNodeId = currentNode.nextNodeId;
-                }
-    
-                testResults.push(result);
-                stepCount++;
-    
-                // End node or no next node
-                if (!currentNodeId || currentNode.type === 'end') {
-                    break;
-                }
-    
-                // Safety check for self-referencing nodes
-                if (currentNodeId === currentNode.nodeId) {
-                    result.warning = "Self-referencing node detected, stopping execution";
-                    break;
-                }
-            }
-    
+
             return res.status(200).json({
                 success: true,
                 message: "Workflow test completed",
-                data: {
-                    workflowId: workflow._id,
-                    workflowName: workflow.name,
-                    phoneNumber: phoneNumber,
-                    messagesEnabled: sendMessages,
-                    mode: interactiveMode ? "interactive" : "simulation",
-                    testResults,
-                    finalData: testSession.data,
-                    stepsExecuted: stepCount,
-                    messagesSent: messagesSent,
-                    warnings: messagesSent >= maxMessagesPerMinute ? 
-                        "Rate limit approached during testing. Some messages may have been delayed." : null
-                }
+                data: testResult
             });
+
         } catch (error) {
-            console.error("Error in testWorkflow:", error);
+            console.error("Error testing workflow:", error);
             return res.status(500).json({
                 success: false,
                 message: "Internal server error",
@@ -1062,54 +1122,15 @@ const WorkflowController = {
             });
         }
     },
-    
-    // Helper function for condition evaluation
-    // evaluateCondition: function(condition, data) {
-    //     try {
-    //         // Handle length checks
-    //         const lengthRegex = /(\w+)\.length\s*(>|<|>=|<=)\s*(\d+)/;
-    //         const lengthMatch = condition.match(lengthRegex);
-            
-    //         if (lengthMatch) {
-    //             const [, field, operator, value] = lengthMatch;
-    //             const fieldValue = data[field];
-    //             if (!fieldValue) return false;
-                
-    //             const length = fieldValue.length;
-    //             const compareValue = parseInt(value);
-                
-    //             switch (operator) {
-    //                 case '>': return length > compareValue;
-    //                 case '<': return length < compareValue;
-    //                 case '>=': return length >= compareValue;
-    //                 case '<=': return length <= compareValue;
-    //             }
-    //         }
-            
-    //         // Handle includes checks
-    //         const includesRegex = /(\w+)\.includes\(['"](.+)['"]\)/;
-    //         const includesMatch = condition.match(includesRegex);
-            
-    //         if (includesMatch) {
-    //             const [, field, searchValue] = includesMatch;
-    //             const fieldValue = data[field];
-    //             return fieldValue && fieldValue.includes(searchValue);
-    //         }
-            
-    //         return false;
-    //     } catch (error) {
-    //         console.error('Error evaluating condition:', error);
-    //         return false;
-    //     }
-    // },
 
-    // Get workflow analytics
+    // Get workflow analytics (enhanced with unified analytics)
     getWorkflowAnalytics: async (req, res) => {
         try {
             const { id } = req.params;
+            const adminId = req.adminId;
             const { startDate, endDate } = req.query;
 
-            const workflow = await Workflow.findById(id);
+            const workflow = await Workflow.findOne({ _id: id, adminId });
 
             if (!workflow) {
                 return res.status(404).json({
@@ -1118,115 +1139,36 @@ const WorkflowController = {
                 });
             }
 
-            // Check permissions
-            if (workflow.adminId.toString() !== req.adminId) {
-                return res.status(403).json({
+            // Get unified analytics
+            const analytics = await unifiedGtmService.getUnifiedAnalytics(id, startDate, endDate);
+
+            if (!analytics) {
+                return res.status(404).json({
                     success: false,
-                    message: "You don't have permission to view analytics for this workflow"
+                    message: "No analytics data found for this workflow"
                 });
             }
 
-            // Build date filter
-            const dateFilter = {};
-            if (startDate || endDate) {
-                dateFilter.createdAt = {};
-                if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
-                if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
-            }
-
-            // Base query
-            const baseQuery = { workflowId: workflow._id, ...dateFilter };
-
-            // Get session statistics
-            const totalSessions = await UserSession.countDocuments(baseQuery);
-
-            const sessionsByStatus = await UserSession.aggregate([
-                { $match: baseQuery },
-                { $group: { _id: "$status", count: { $sum: 1 } } }
-            ]);
-
-            // Get completion rate
-            const completedSessions = sessionsByStatus.find(item => item._id === 'completed')?.count || 0;
-            const completionRate = totalSessions > 0 ? (completedSessions / totalSessions) * 100 : 0;
-
-            // Get average session duration
-            const completedSessionsData = await UserSession.find({
-                ...baseQuery,
-                status: 'completed',
-                startedAt: { $ne: null },
-                completedAt: { $ne: null }
-            });
-
-            let totalDuration = 0;
-            completedSessionsData.forEach(session => {
-                const duration = session.completedAt.getTime() - session.startedAt.getTime();
-                totalDuration += duration;
-            });
-
-            const avgSessionDuration = completedSessionsData.length > 0
-                ? Math.floor(totalDuration / completedSessionsData.length / 1000) // in seconds
-                : 0;
-
-            // Get node analytics
-            const nodeAnalytics = {};
-            const sessions = await UserSession.find(baseQuery);
-
-            sessions.forEach(session => {
-                if (session.stepsCompleted) {
-                    session.stepsCompleted.forEach(nodeId => {
-                        if (!nodeAnalytics[nodeId]) {
-                            nodeAnalytics[nodeId] = { visits: 0 };
-                        }
-                        nodeAnalytics[nodeId].visits++;
-                    });
-                }
-            });
-
-            // Add node names to analytics
-            workflow.nodes.forEach(node => {
-                if (nodeAnalytics[node.nodeId]) {
-                    nodeAnalytics[node.nodeId].name = node.name;
-                    nodeAnalytics[node.nodeId].type = node.type;
-                }
-            });
-
-            // Get drop-off points
-            const dropOffPoints = {};
-            sessions.forEach(session => {
-                if (session.status === 'abandoned' && session.currentNodeId) {
-                    if (!dropOffPoints[session.currentNodeId]) {
-                        dropOffPoints[session.currentNodeId] = { count: 0 };
-                    }
-                    dropOffPoints[session.currentNodeId].count++;
-                }
-            });
-
-            // Add node names to drop-off points
-            workflow.nodes.forEach(node => {
-                if (dropOffPoints[node.nodeId]) {
-                    dropOffPoints[node.nodeId].name = node.name;
-                    dropOffPoints[node.nodeId].type = node.type;
-                }
-            });
+            // Enhanced analytics with SurePass info
+            const enhancedAnalytics = {
+                workflow_info: {
+                    id: workflow._id,
+                    name: workflow.name,
+                    category: workflow.category,
+                    has_surepass_integration: workflow.metadata?.hasSurePassIntegration || false,
+                    surepass_endpoints: workflow.metadata?.surePassEndpoints || []
+                },
+                analytics,
+                date_range: { startDate, endDate }
+            };
 
             return res.status(200).json({
                 success: true,
-                data: {
-                    workflowId: workflow._id,
-                    workflowName: workflow.name,
-                    totalSessions,
-                    sessionsByStatus: sessionsByStatus.reduce((acc, curr) => {
-                        acc[curr._id] = curr.count;
-                        return acc;
-                    }, {}),
-                    completionRate: parseFloat(completionRate.toFixed(2)),
-                    avgSessionDurationSeconds: avgSessionDuration,
-                    nodeAnalytics,
-                    dropOffPoints
-                }
+                data: enhancedAnalytics
             });
+
         } catch (error) {
-            console.error("Error in getWorkflowAnalytics:", error);
+            console.error("Error getting workflow analytics:", error);
             return res.status(500).json({
                 success: false,
                 message: "Internal server error",

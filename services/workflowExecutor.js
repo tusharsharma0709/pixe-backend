@@ -1,4 +1,4 @@
-// services/workflowExecutor.js - Updated to use unified tracking service
+// services/workflowExecutor.js - Complete implementation with unified tracking
 
 const { Message } = require('../models/Messages');
 const { Workflow } = require('../models/Workflows');
@@ -9,7 +9,7 @@ const whatsappService = require('./whatsappServices');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 
-// UNIFIED: Import the single unified tracking service instead of multiple services
+// UNIFIED: Import the single unified tracking service
 const unifiedGtmService = require('./gtmTrackingServices');
 
 // Store recently processed message IDs to prevent duplicate processing
@@ -18,7 +18,7 @@ const recentProcessedMessages = new Map();
 // Track node execution counts to prevent infinite loops
 const nodeExecutionCounts = new Map();
 
-// Helper functions remain the same...
+// Helper functions
 function incrementNodeExecutionCount(key) {
     const count = nodeExecutionCounts.get(key) || 0;
     nodeExecutionCounts.set(key, count + 1);
@@ -36,7 +36,6 @@ function resetNodeExecutionCount(sessionId, nodeId) {
 }
 
 function evaluateCondition(condition, data) {
-    // ... same implementation as before
     try {
         if (!condition) return false;
         
@@ -124,7 +123,6 @@ function evaluateCondition(condition, data) {
 }
 
 function processTemplate(content, data) {
-    // ... same implementation as before
     if (!content || !data) return content;
     
     try {
@@ -630,9 +628,9 @@ async function executeWorkflowNode(session, nodeId) {
                             session.data = {};
                         }
                         
-                        // Special handling for KYC verification endpoints
+                        // Special handling for SurePass KYC verification endpoints
                         if (node.apiEndpoint === '/api/verification/aadhaar') {
-                            console.log('  🔍 Special handling for direct Aadhaar verification');
+                            console.log('  🔍 Special handling for SurePass Aadhaar verification');
                             
                             try {
                                 const kycWorkflowHandlers = require('./kycWorkflowHandlers');
@@ -662,7 +660,8 @@ async function executeWorkflowNode(session, nodeId) {
                                                 session: session,
                                                 execution_time_ms: apiResponseTime,
                                                 verification_type: 'api_verification',
-                                                provider: 'surepass'
+                                                provider: 'surepass',
+                                                api_endpoint: node.apiEndpoint
                                             }
                                         );
                                     }
@@ -690,7 +689,166 @@ async function executeWorkflowNode(session, nodeId) {
                                             {
                                                 session: session,
                                                 execution_time_ms: apiResponseTime,
-                                                error: kycError.message
+                                                error: kycError.message,
+                                                api_endpoint: node.apiEndpoint
+                                            }
+                                        );
+                                    }
+                                } catch (gtmError) {
+                                    console.error('Unified GTM tracking error:', gtmError);
+                                }
+                                
+                                executionSuccess = false;
+                                executionError = kycError.message;
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw kycError;
+                            }
+                        }
+                        // Handle other SurePass endpoints
+                        else if (node.apiEndpoint === '/api/verification/pan') {
+                            console.log('  🔍 Special handling for SurePass PAN verification');
+                            
+                            try {
+                                const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                                const result = await kycWorkflowHandlers.verifyPan(session._id);
+                                console.log('  PAN verification result:', result);
+                                
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.panVerificationResult = result;
+                                session.data.isPanVerified = result.success;
+                                if (result.success && result.panName) {
+                                    session.data.panName = result.panName;
+                                }
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // UNIFIED: Track PAN verification
+                                try {
+                                    const user = await User.findById(session.userId);
+                                    if (user) {
+                                        await unifiedGtmService.trackKycStep(
+                                            user, 
+                                            'pan', 
+                                            result.success, 
+                                            {
+                                                session: session,
+                                                execution_time_ms: apiResponseTime,
+                                                verification_type: 'api_verification',
+                                                provider: 'surepass',
+                                                api_endpoint: node.apiEndpoint
+                                            }
+                                        );
+                                    }
+                                } catch (gtmError) {
+                                    console.error('Unified GTM tracking error:', gtmError);
+                                }
+                                
+                            } catch (kycError) {
+                                console.error('Error verifying PAN:', kycError);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                
+                                session.data.isPanVerified = false;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // UNIFIED: Track failed PAN verification
+                                try {
+                                    const user = await User.findById(session.userId);
+                                    if (user) {
+                                        await unifiedGtmService.trackKycStep(
+                                            user, 
+                                            'pan', 
+                                            false, 
+                                            {
+                                                session: session,
+                                                execution_time_ms: apiResponseTime,
+                                                error: kycError.message,
+                                                api_endpoint: node.apiEndpoint
+                                            }
+                                        );
+                                    }
+                                } catch (gtmError) {
+                                    console.error('Unified GTM tracking error:', gtmError);
+                                }
+                                
+                                executionSuccess = false;
+                                executionError = kycError.message;
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw kycError;
+                            }
+                        }
+                        // Handle bank account verification
+                        else if (node.apiEndpoint === '/api/verification/bank-account') {
+                            console.log('  🔍 Special handling for SurePass Bank Account verification');
+                            
+                            try {
+                                const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                                const result = await kycWorkflowHandlers.verifyBankAccount(session._id);
+                                console.log('  Bank account verification result:', result);
+                                
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.bankVerificationResult = result;
+                                session.data.isBankVerified = result.success;
+                                if (result.success && result.accountHolderName) {
+                                    session.data.accountHolderName = result.accountHolderName;
+                                }
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // UNIFIED: Track bank verification
+                                try {
+                                    const user = await User.findById(session.userId);
+                                    if (user) {
+                                        await unifiedGtmService.trackKycStep(
+                                            user, 
+                                            'bank_account', 
+                                            result.success, 
+                                            {
+                                                session: session,
+                                                execution_time_ms: apiResponseTime,
+                                                verification_type: 'api_verification',
+                                                provider: 'surepass',
+                                                api_endpoint: node.apiEndpoint
+                                            }
+                                        );
+                                    }
+                                } catch (gtmError) {
+                                    console.error('Unified GTM tracking error:', gtmError);
+                                }
+                                
+                            } catch (kycError) {
+                                console.error('Error verifying bank account:', kycError);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                
+                                session.data.isBankVerified = false;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // UNIFIED: Track failed bank verification
+                                try {
+                                    const user = await User.findById(session.userId);
+                                    if (user) {
+                                        await unifiedGtmService.trackKycStep(
+                                            user, 
+                                            'bank_account', 
+                                            false, 
+                                            {
+                                                session: session,
+                                                execution_time_ms: apiResponseTime,
+                                                error: kycError.message,
+                                                api_endpoint: node.apiEndpoint
                                             }
                                         );
                                     }
@@ -946,4 +1104,4 @@ module.exports = {
     startWorkflowExecution,
     evaluateCondition,
     processTemplate
-};
+};// services/workflowExecutor.js - Complete implementation with unified tracking

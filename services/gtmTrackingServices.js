@@ -1,4 +1,4 @@
-// services/unifiedGtmTrackingService.js - Single service for all tracking needs
+// services/unifiedGtmTrackingService.js - Complete unified tracking service
 const gtmService = require('./gtmServices');
 const { broadcastTrackingEvent } = require('./trackingEventEmitters');
 const mongoose = require('mongoose');
@@ -13,7 +13,7 @@ const GA4_MEASUREMENT_ID = process.env.GA4_MEASUREMENT_ID || '{{GA4_MEASUREMENT_
 const UnifiedTrackingEventSchema = new mongoose.Schema({
     // Basic event information
     event_type: String, // 'workflow_start', 'node_executed', 'kyc_verification', etc.
-    event_category: String, // 'workflow', 'kyc', 'api', 'user_interaction'
+    event_category: String, // 'workflow', 'kyc', 'api', 'user_interaction', 'workflow_management'
     
     // Workflow context
     workflow_id: mongoose.Schema.Types.ObjectId,
@@ -123,7 +123,9 @@ async function trackWorkflowStart(session, workflow) {
             workflow_category: workflow.category,
             workflow_tags: workflow.tags,
             session_source: session.source,
-            start_node_id: workflow.startNodeId
+            start_node_id: workflow.startNodeId,
+            has_surepass_integration: workflow.metadata?.hasSurePassIntegration || false,
+            surepass_endpoints: workflow.metadata?.surePassEndpoints || []
         }
     });
 }
@@ -148,7 +150,9 @@ async function trackNodeExecution(session, node, executionTime = 0, success = tr
             node_content_preview: node.content ? node.content.substring(0, 100) : null,
             has_conditions: !!node.condition,
             has_api_endpoint: !!node.apiEndpoint,
-            next_node_id: node.nextNodeId
+            next_node_id: node.nextNodeId,
+            is_surepass_node: node.surePassConfig ? true : false,
+            surepass_step: node.surePassConfig?.verificationStep || null
         }
     });
 }
@@ -205,7 +209,8 @@ async function trackKycStep(user, kycStep, isCompleted = true, additionalData = 
             verification_provider: additionalData.provider || 'surepass',
             user_name: user.name,
             user_phone: user.phone,
-            additional_context: additionalData.context || {}
+            additional_context: additionalData.context || {},
+            api_endpoint: additionalData.api_endpoint || null
         }
     });
 }
@@ -241,6 +246,8 @@ async function trackApiCall(session, apiEndpoint, method, success, responseTime,
                      apiEndpoint.includes('surepass') || 
                      apiEndpoint.includes('kyc');
     
+    const isSurePassApi = apiEndpoint.startsWith('/api/verification/');
+    
     return await trackEvent({
         event_type: isKycApi ? 'kyc_api_call' : 'api_call',
         event_category: isKycApi ? 'kyc' : 'api',
@@ -254,7 +261,9 @@ async function trackApiCall(session, apiEndpoint, method, success, responseTime,
         metadata: {
             api_endpoint: apiEndpoint,
             http_method: method,
-            api_category: isKycApi ? 'kyc_verification' : 'general'
+            api_category: isKycApi ? 'kyc_verification' : 'general',
+            is_surepass_api: isSurePassApi,
+            verification_step: isSurePassApi ? apiEndpoint.split('/').pop() : null
         }
     });
 }
@@ -270,7 +279,8 @@ async function trackWorkflowCompletion(session, workflow, totalExecutionTime = 0
     
     // Determine if this is a KYC workflow
     const isKycWorkflow = workflow.name.toLowerCase().includes('kyc') || 
-                         workflow.category?.toLowerCase().includes('kyc');
+                         workflow.category?.toLowerCase().includes('kyc') ||
+                         workflow.metadata?.hasSurePassIntegration;
     
     return await trackEvent({
         event_type: isKycWorkflow ? 'kyc_workflow_complete' : 'workflow_complete',
@@ -287,7 +297,9 @@ async function trackWorkflowCompletion(session, workflow, totalExecutionTime = 0
             completed_steps: completedSteps,
             session_duration_ms: session.completedAt ? 
                 (session.completedAt.getTime() - session.startedAt.getTime()) : null,
-            interaction_count: session.interactionCount || 0
+            interaction_count: session.interactionCount || 0,
+            has_surepass_integration: workflow.metadata?.hasSurePassIntegration || false,
+            surepass_steps_completed: workflow.metadata?.surePassEndpoints || []
         }
     });
 }
