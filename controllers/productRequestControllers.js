@@ -652,6 +652,98 @@ exports.deleteProductRequest = async (req, res) => {
 };
 
 /**
+ * Apply for review - Submit product for review by super admin
+ */
+exports.reviewApplyProduct = async (req, res) => {
+    try {
+        const adminId = req.adminId;
+        const productId = req.params.id;
+
+        // Find the product request
+        const productRequest = await ProductRequest.findOne({
+            _id: productId,
+            adminId: adminId
+        });
+
+        if (!productRequest) {
+            return res.status(404).json({
+                success: false,
+                message: "Product request not found or you don't have access to it"
+            });
+        }
+
+        // Check if product can be submitted for review
+        if (!['draft'].includes(productRequest.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot apply for review. Product must be in draft status. Current status: ${productRequest.status}`
+            });
+        }
+
+        // Validate required fields before submitting
+        const validationErrors = [];
+        
+        if (!productRequest.name || productRequest.name.trim() === '') {
+            validationErrors.push('Product name is required');
+        }
+        
+        if (!productRequest.price || productRequest.price <= 0) {
+            validationErrors.push('Valid product price is required');
+        }
+        
+        if (!productRequest.images || productRequest.images.length === 0) {
+            validationErrors.push('At least one product image is required');
+        }
+        
+        if (!productRequest.catalogId) {
+            validationErrors.push('Product must be assigned to a catalog');
+        }
+
+        // You can add more validation rules as needed
+        if (validationErrors.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Product cannot be submitted for review due to validation errors",
+                errors: validationErrors
+            });
+        }
+
+        // Update the product request status to 'submitted'
+        const updatedProductRequest = await ProductRequest.findByIdAndUpdate(
+            productId,
+            { 
+                $set: { 
+                    status: 'submitted',
+                    // Clear any previous rejection data
+                    rejectionReason: null,
+                    reviewedAt: null,
+                    superAdminNotes: null
+                }
+            },
+            { new: true, runValidators: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: "Product request submitted for review successfully",
+            productRequest: {
+                id: updatedProductRequest._id,
+                name: updatedProductRequest.name,
+                status: updatedProductRequest.status,
+                submittedAt: updatedProductRequest.updatedAt
+            }
+        });
+    } catch (error) {
+        console.error("Apply for review error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error submitting product request for review",
+            error: error.message
+        });
+    }
+};
+
+/**
  * Get all product requests for an admin
  */
 exports.getAdminProductRequests = async (req, res) => {

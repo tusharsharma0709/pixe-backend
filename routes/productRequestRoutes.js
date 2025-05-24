@@ -44,6 +44,12 @@ router.delete(
     productRequestController.deleteProductRequest
 );
 
+router.patch(
+    '/:id',
+    adminAuth,
+    productRequestController.reviewApplyProduct
+);
+
 // Super Admin routes
 router.get(
     '/',
