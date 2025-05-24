@@ -45,7 +45,7 @@ router.delete(
 );
 
 router.patch(
-    '/:id',
+    '/:id/apply',
     adminAuth,
     productRequestController.reviewApplyProduct
 );
