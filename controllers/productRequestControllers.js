@@ -41,10 +41,39 @@ exports.createProductRequest = async (req, res) => {
             });
         }
 
-        // If catalogId is provided, verify it exists and belongs to the admin
-        if (productData.catalogId) {
+        // Require catalogId
+        if (!productData.catalogId) {
+            return res.status(400).json({
+                success: false,
+                message: "Product catalog is required"
+            });
+        }
+
+        // Handle catalogId - use provided or create/find default
+        let finalCatalogId = productData.catalogId;
+        
+        if (!finalCatalogId) {
+            // Create or find a default catalog for this admin
+            let defaultCatalog = await ProductCatalog.findOne({
+                adminId: adminId,
+                name: 'Default Products'
+            });
+
+            if (!defaultCatalog) {
+                defaultCatalog = await ProductCatalog.create({
+                    adminId: adminId,
+                    name: 'Default Products',
+                    description: 'Default catalog for products without specific catalog assignment',
+                    status: 'active'
+                });
+                console.log('Created default catalog for admin:', adminId);
+            }
+            
+            finalCatalogId = defaultCatalog._id;
+        } else {
+            // Validate provided catalogId
             const catalog = await ProductCatalog.findOne({
-                _id: productData.catalogId,
+                _id: finalCatalogId,
                 adminId: adminId
             });
 
@@ -205,7 +234,7 @@ exports.createProductRequest = async (req, res) => {
             isDigital: productData.isDigital === 'true',
             hasVariants: productData.hasVariants === 'true',
             status: productData.status || 'draft',
-            catalogId: productData.catalogId || null,
+            catalogId: finalCatalogId,
             adminNotes: productData.adminNotes || null,
             taxable: productData.taxable === 'true',
             taxClass: productData.taxClass || 'standard',
@@ -288,18 +317,43 @@ exports.updateProductRequest = async (req, res) => {
             });
         }
 
-        // If catalogId is being updated, verify it exists and belongs to the admin
-        if (updateData.catalogId && updateData.catalogId !== productRequest.catalogId?.toString()) {
-            const catalog = await ProductCatalog.findOne({
-                _id: updateData.catalogId,
-                adminId: adminId
-            });
-
-            if (!catalog) {
-                return res.status(404).json({
-                    success: false,
-                    message: "Catalog not found or you don't have access to it"
+        // Handle catalogId updates - ensure every product always has a catalog
+        let finalCatalogId = productRequest.catalogId; // Start with existing catalog
+        
+        if (updateData.catalogId !== undefined) {
+            if (updateData.catalogId && updateData.catalogId.trim() !== '') {
+                // Validate the new catalogId
+                const catalog = await ProductCatalog.findOne({
+                    _id: updateData.catalogId,
+                    adminId: adminId
                 });
+
+                if (!catalog) {
+                    return res.status(404).json({
+                        success: false,
+                        message: "Catalog not found or you don't have access to it"
+                    });
+                }
+                
+                finalCatalogId = updateData.catalogId;
+            } else {
+                // User is trying to remove catalogId - assign to default catalog instead
+                let defaultCatalog = await ProductCatalog.findOne({
+                    adminId: adminId,
+                    name: 'Default Products'
+                });
+
+                if (!defaultCatalog) {
+                    defaultCatalog = await ProductCatalog.create({
+                        adminId: adminId,
+                        name: 'Default Products',
+                        description: 'Default catalog for products without specific catalog assignment',
+                        status: 'active'
+                    });
+                    console.log('Created default catalog for admin during update:', adminId);
+                }
+                
+                finalCatalogId = defaultCatalog._id;
             }
         }
 
@@ -460,7 +514,7 @@ exports.updateProductRequest = async (req, res) => {
             brand: updateData.brand || productRequest.brand,
             images: finalImages,
             status: updateData.status || productRequest.status,
-            catalogId: updateData.catalogId || productRequest.catalogId,
+            catalogId: finalCatalogId,
             adminNotes: updateData.adminNotes || productRequest.adminNotes,
             isDigital: updateData.isDigital === 'true',
             hasVariants: updateData.hasVariants === 'true',
