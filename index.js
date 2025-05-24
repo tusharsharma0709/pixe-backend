@@ -77,16 +77,8 @@ const startServer = async () => {
                 console.log('   - User interaction tracking: ✅ Enabled');
                 console.log('   - SurePass integration tracking: ✅ Enabled');
                 
-                // Log GTM configuration details
-                console.log('   - GTM Account ID:', process.env.DEFAULT_ACCOUNT_ID);
-                console.log('   - GTM Container ID:', process.env.DEFAULT_CONTAINER_ID);
-                console.log('   - GTM Workspace ID:', process.env.DEFAULT_WORKSPACE_ID || 'default');
-                console.log('   - GA4 Measurement ID:', process.env.GA4_MEASUREMENT_ID || '[Not configured]');
-                
             } else {
                 console.log('⚠️ GTM environment variables not set. GTM tracking will be disabled.');
-                console.log('   Required: DEFAULT_ACCOUNT_ID, DEFAULT_CONTAINER_ID');
-                console.log('   Optional: DEFAULT_WORKSPACE_ID, GA4_MEASUREMENT_ID');
             }
             
             // Check SurePass configuration

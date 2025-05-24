@@ -844,19 +844,75 @@ exports.getProductRequestById = async (req, res) => {
  */
 exports.getAllProductRequests = async (req, res) => {
     try {
-        const { status, adminId, page = 1, limit = 10, sort = 'createdAt', order = 'desc', search } = req.query;
+        const { 
+            status, 
+            adminId, 
+            catalogId,
+            page = 1, 
+            limit = 10, 
+            sort = 'createdAt', 
+            order = 'desc', 
+            search,
+            category,
+            brand,
+            priceMin,
+            priceMax
+        } = req.query;
 
         // Build query
         const query = {};
         
         // Filter by status if provided
         if (status) {
-            query.status = status;
+            if (status.includes(',')) {
+                // Multiple statuses: ?status=draft,submitted,approved
+                query.status = { $in: status.split(',').map(s => s.trim()) };
+            } else {
+                // Single status: ?status=draft
+                query.status = status;
+            }
         }
         
         // Filter by adminId if provided
         if (adminId) {
-            query.adminId = adminId;
+            if (adminId.includes(',')) {
+                // Multiple adminIds: ?adminId=id1,id2,id3
+                query.adminId = { $in: adminId.split(',').map(id => id.trim()) };
+            } else {
+                // Single adminId: ?adminId=60f1234567890abcdef12345
+                query.adminId = adminId;
+            }
+        }
+        
+        // Filter by catalogId if provided
+        if (catalogId) {
+            if (catalogId.includes(',')) {
+                // Multiple catalogIds: ?catalogId=cat1,cat2,cat3
+                query.catalogId = { $in: catalogId.split(',').map(id => id.trim()) };
+            } else if (catalogId.toLowerCase() === 'null' || catalogId.toLowerCase() === 'none') {
+                // Products without catalog: ?catalogId=null
+                query.catalogId = null;
+            } else {
+                // Single catalogId: ?catalogId=60f1234567890abcdef12345
+                query.catalogId = catalogId;
+            }
+        }
+        
+        // Filter by category if provided
+        if (category) {
+            query.category = { $regex: category, $options: 'i' };
+        }
+        
+        // Filter by brand if provided
+        if (brand) {
+            query.brand = { $regex: brand, $options: 'i' };
+        }
+        
+        // Filter by price range
+        if (priceMin || priceMax) {
+            query.price = {};
+            if (priceMin) query.price.$gte = parseFloat(priceMin);
+            if (priceMax) query.price.$lte = parseFloat(priceMax);
         }
         
         // Add text search if provided
@@ -864,16 +920,33 @@ exports.getAllProductRequests = async (req, res) => {
             query.$or = [
                 { name: { $regex: search, $options: 'i' } },
                 { description: { $regex: search, $options: 'i' } },
-                { brand: { $regex: search, $options: 'i' } }
+                { brand: { $regex: search, $options: 'i' } },
+                { category: { $regex: search, $options: 'i' } },
+                { subCategory: { $regex: search, $options: 'i' } },
+                { 'inventory.sku': { $regex: search, $options: 'i' } }
             ];
         }
 
         // Calculate pagination
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit))); // Max 100 items per page
+        const skip = (pageNum - 1) * limitNum;
         
-        // Sort order
+        // Sort order - support multiple sort fields
         const sortObj = {};
-        sortObj[sort] = order === 'asc' ? 1 : -1;
+        if (sort.includes(',')) {
+            // Multiple sort fields: ?sort=status,createdAt&order=asc,desc
+            const sortFields = sort.split(',');
+            const orderFields = order.split(',');
+            
+            sortFields.forEach((field, index) => {
+                const sortOrder = orderFields[index] || order;
+                sortObj[field.trim()] = sortOrder === 'asc' ? 1 : -1;
+            });
+        } else {
+            // Single sort field
+            sortObj[sort] = order === 'asc' ? 1 : -1;
+        }
 
         // Get total count for pagination
         const total = await ProductRequest.countDocuments(query);
@@ -882,23 +955,63 @@ exports.getAllProductRequests = async (req, res) => {
         const productRequests = await ProductRequest.find(query)
             .sort(sortObj)
             .skip(skip)
-            .limit(parseInt(limit))
-            .populate('adminId', 'name email businessName')
-            .populate('catalogId', 'name');
+            .limit(limitNum)
+            .populate('adminId', 'name email businessName phoneNumber')
+            .populate('catalogId', 'name description status')
+            .lean(); // Use lean for better performance
+
+        // Add computed fields
+        const enrichedProductRequests = productRequests.map(product => ({
+            ...product,
+            primaryImage: product.images?.find(img => img.isPrimary)?.url || product.images?.[0]?.url || null,
+            totalImages: product.images?.length || 0,
+            hasDiscount: product.salePrice && product.salePrice < product.price,
+            discountPercentage: product.salePrice && product.price ? 
+                Math.round(((product.price - product.salePrice) / product.price) * 100) : 0
+        }));
+
+        // Calculate pagination info
+        const totalPages = Math.ceil(total / limitNum);
+        const hasNextPage = pageNum < totalPages;
+        const hasPrevPage = pageNum > 1;
 
         res.status(200).json({
             success: true,
-            total,
-            currentPage: parseInt(page),
-            totalPages: Math.ceil(total / parseInt(limit)),
-            productRequests
+            data: {
+                productRequests: enrichedProductRequests,
+                pagination: {
+                    total,
+                    currentPage: pageNum,
+                    totalPages,
+                    limit: limitNum,
+                    hasNextPage,
+                    hasPrevPage,
+                    nextPage: hasNextPage ? pageNum + 1 : null,
+                    prevPage: hasPrevPage ? pageNum - 1 : null
+                },
+                filters: {
+                    status,
+                    adminId,
+                    catalogId,
+                    category,
+                    brand,
+                    priceMin,
+                    priceMax,
+                    search
+                },
+                summary: {
+                    totalProducts: total,
+                    currentResults: enrichedProductRequests.length
+                }
+            }
         });
     } catch (error) {
         console.error("Get all product requests error:", error);
         res.status(500).json({
             success: false,
             message: "Error fetching product requests",
-            error: error.message
+            error: error.message,
+            timestamp: new Date().toISOString()
         });
     }
 };
