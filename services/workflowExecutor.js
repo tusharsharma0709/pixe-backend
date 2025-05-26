@@ -1108,6 +1108,155 @@ async function executeWorkflowNode(session, nodeId) {
                                 throw kycError;
                             }
                         }
+                        // Example: FSSAI Verification Storage
+                        else if (node.apiEndpoint === '/api/verification/fssai') {
+                            try {
+                                const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                                const result = await kycWorkflowHandlers.verifyFSSAI(session._id);
+                                
+                                // Store in session (temporary)
+                                session.data.fssaiVerificationResult = result;
+                                session.data.isFssaiVerified = result.success;
+                                // ... other session data
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // ALSO store in Verification model (permanent)
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'fssai',
+                                    verificationData: {
+                                        fssai_number: result.data?.fssai_number,
+                                        company_name: result.data?.details?.[0]?.company_name,
+                                        license_status: result.data?.details?.[0]?.status_desc,
+                                        license_category: result.data?.details?.[0]?.license_category_name,
+                                        address: result.data?.details?.[0]?.address,
+                                        state_name: result.data?.details?.[0]?.state_name,
+                                        raw_response: result.data // Store full API response
+                                    },
+                                    status: result.success ? 'verified' : 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass',
+                                    apiEndpoint: 'https://kyc-api.surepass.io/api/v1/corporate/fssai'
+                                });
+                                
+                                console.log('✅ FSSAI verification saved to database');
+                                
+                            } catch (error) {
+                                // Also store failed verifications
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'fssai',
+                                    verificationData: {
+                                        error_message: error.message,
+                                        attempted_fssai_number: session.data.id_number
+                                    },
+                                    status: 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass',
+                                    errorDetails: error.message
+                                });
+                            }
+                        }
+
+                        // Example: GSTIN Verification Storage
+                        else if (node.apiEndpoint === '/api/verification/gstin') {
+                            try {
+                                const result = await kycWorkflowHandlers.verifyGSTIN(session._id);
+                                
+                                // Session storage
+                                session.data.gstinVerificationResult = result;
+                                // ... other session data
+                                await session.save();
+                                
+                                // Verification model storage
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'gstin',
+                                    verificationData: {
+                                        gstin: result.data?.gstin,
+                                        pan_number: result.data?.pan_number,
+                                        business_name: result.data?.business_name,
+                                        legal_name: result.data?.legal_name,
+                                        gstin_status: result.data?.gstin_status,
+                                        date_of_registration: result.data?.date_of_registration,
+                                        constitution_of_business: result.data?.constitution_of_business,
+                                        taxpayer_type: result.data?.taxpayer_type,
+                                        address: result.data?.address,
+                                        nature_bus_activities: result.data?.nature_bus_activities,
+                                        raw_response: result.data
+                                    },
+                                    status: result.success ? 'verified' : 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass'
+                                });
+                                
+                            } catch (error) {
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'gstin',
+                                    verificationData: { error_message: error.message },
+                                    status: 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass',
+                                    errorDetails: error.message
+                                });
+                            }
+                        }
+
+                        // Example: ICAI Verification Storage
+                        else if (node.apiEndpoint === '/api/verification/icai') {
+                            try {
+                                const result = await kycWorkflowHandlers.verifyICAI(session._id);
+                                
+                                // Session storage
+                                session.data.icaiVerificationResult = result;
+                                await session.save();
+                                
+                                // Verification model storage
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'icai',
+                                    verificationData: {
+                                        membership_number: result.data?.membership_number,
+                                        member_name: result.data?.details?.member_name,
+                                        member_status: result.data?.details?.member_status,
+                                        cop_status: result.data?.details?.cop_status,
+                                        associate_or_fellow: result.data?.details?.associate_or_fellow,
+                                        gender: result.data?.details?.gender,
+                                        professional_address: result.data?.details?.professional_address,
+                                        professional_region: result.data?.details?.professional_region,
+                                        raw_response: result.data
+                                    },
+                                    status: result.success ? 'verified' : 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass'
+                                });
+                                
+                            } catch (error) {
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'icai',
+                                    verificationData: { error_message: error.message },
+                                    status: 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass',
+                                    errorDetails: error.message
+                                });
+                            }
+                        }
                         else {
                             // For other APIs, make actual HTTP call
                             const params = {};

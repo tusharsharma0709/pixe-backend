@@ -57,6 +57,24 @@ const SUREPASS_ENDPOINTS = {
         method: 'POST',
         requiredParams: ['din_number'],
         description: 'Verify Director Identification Number using SurePass API'
+    },
+    '/api/verification/fssai': {
+        name: 'FSSAI License Verification',
+        method: 'POST',
+        requiredParams: ['id_number'],
+        description: 'Verify FSSAI license details using SurePass API'
+    },
+    '/api/verification/gstin': {
+        name: 'GSTIN Verification',
+        method: 'POST',
+        requiredParams: ['id_number'],
+        description: 'Verify GSTIN details using SurePass API'
+    },
+    '/api/verification/icai': {
+        name: 'ICAI Membership Verification',
+        method: 'POST',
+        requiredParams: ['membership_number'],
+        description: 'Verify ICAI membership details using SurePass API'
     }
 };
 
