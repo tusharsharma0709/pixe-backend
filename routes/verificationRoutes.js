@@ -1,85 +1,120 @@
-// routes/verificationRoutes.js - Updated with Aadhaar OTP and Bank Verification
-
+// routes/surepassRoutes.js - Updated with new endpoints
 const express = require('express');
 const router = express.Router();
-const verificationController = require('../controllers/verificationControllers');
-const surepassControllers = require('../controllers/surepassControllers');
-const { userAuth } = require('../middlewares/auth');
+const surepassController = require('../controllers/surepassControllers');
+const { userAuth, adminAuth, agentAuth, adminOrAgentAuth } = require('../middlewares/auth');
 const upload = require('../middlewares/multer');
 
-// Aadhaar OCR verification (file uploads)
-router.post(
-    '/aadhaar-ocr',
-    userAuth,
-    upload.fields([
-        { name: 'aadhaarFront', maxCount: 1 },
-        { name: 'aadhaarBack', maxCount: 1 }
-    ]),
-    verificationController.aadhaarOCR
+/**
+ * @route   POST /api/v1/aadhaar-validation/aadhaar-validation
+ * @desc    Validate Aadhaar by ID number
+ * @access  Private
+ */
+router.post('/aadhaar-validation', 
+    userAuth, 
+    surepassController.aadhaarVerification
 );
 
-// PAN card verification (file upload)
-router.post(
-    '/pan',
-    userAuth,
-    upload.single('panCard'),
-    verificationController.panVerification
+/**
+ * @route   POST /api/v1/pan/pan
+ * @desc    Validate PAN card
+ * @access  Private
+ */
+router.post('/pan', 
+    userAuth, 
+    surepassController.panVerification
 );
 
-// Check Aadhaar-PAN link
-router.post(
-    '/aadhaar-pan-link',
-    userAuth,
-    verificationController.aadhaarPanLink
+/**
+ * @route   POST /api/v1/pan/aadhaar-pan-link-check
+ * @desc    Check if Aadhaar and PAN are linked
+ * @access  Private
+ */
+router.post('/aadhaar-pan-link', 
+    userAuth, 
+    surepassController.aadhaarToPan
 );
 
-// Generate Aadhaar OTP for verification
-router.post(
-    '/aadhaar-otp/generate',
-    userAuth,
-    verificationController.generateAadhaarOTP
+/**
+ * @route   POST /api/ocr/aadhaar
+ * @desc    Process OCR for Aadhaar card
+ * @access  Private
+ */
+// router.post('/ocr/aadhaar', 
+//     userAuth, 
+//     upload.single('file'), 
+//     surepassController.aadhaarOCR
+// );
+
+/**
+ * @route   POST /api/ocr/pan
+ * @desc    Process OCR for PAN card
+ * @access  Private
+ */
+router.post('/ocr/pan', 
+    userAuth, 
+    upload.single('file'), 
+    surepassController.voterIdOCR
 );
 
-// Verify Aadhaar OTP 
-router.post(
-    '/aadhaar-otp/verify',
-    userAuth,
-    verificationController.verifyAadhaarOTP
+/**
+ * @route   POST /api/v1/aadhaar-v2/generate-otp
+ * @desc    Generate OTP for Aadhaar verification
+ * @access  Private
+ */
+router.post('/aadhaar-v2/generate-otp', 
+    userAuth, 
+    surepassController.generateAadhaarOTP
 );
 
-// Bank account verification
-router.post(
-    '/bank-account',
-    userAuth,
-    verificationController.updateBankAccount
+/**
+ * @route   POST /api/v1/aadhaar-v2/submit-otp
+ * @desc    Submit OTP for Aadhaar verification
+ * @access  Private
+ */
+router.post('/aadhaar-v2/submit-otp', 
+    userAuth, 
+    surepassController.verifyAadhaarOTP
 );
 
-// Verify bank account using penny drop
-router.post(
-    '/bank-account/verify',
-    userAuth,
-    verificationController.verifyBankAccount
+/**
+ * @route   POST /api/v1/bank-verification
+ * @desc    Verify bank account
+ * @access  Private
+ */
+router.post('/bank-verification', 
+    userAuth, 
+    surepassController.verifyBankAccount
 );
 
-// Get verification status
-router.get(
-    '/status',
-    userAuth,
-    verificationController.getVerificationStatus
+/**
+ * @route   POST /api/v1/rc/chassis-to-rc-details
+ * @desc    Get RC details by chassis number
+ * @access  Private
+ */
+router.post('/chassis-to-rc-details', 
+    userAuth, 
+    surepassController.getChassisToRCDetails
 );
 
-// Direct SurePass API endpoints for advanced use cases
-// Aadhaar OTP endpoints
-router.post('/aadhaar-v2/generate-otp',userAuth, surepassControllers.generateAadhaarOTP);
-router.post('/aadhaar-v2/verify-otp',userAuth, surepassControllers.verifyAadhaarOTP);
+/**
+ * @route   POST /api/v1/corporate/company-details
+ * @desc    Get company details by CIN
+ * @access  Private
+ */
+router.post('/company-details', 
+    userAuth, 
+    surepassController.getCompanyDetails
+);
 
-// Bank verification endpoint
-router.post('/bank-verification',userAuth, surepassControllers.verifyBankAccount);
-
-// Other SurePass endpoints
-router.post('/pan/verify',userAuth, surepassControllers.panVerification);
-router.post('/pan/comprehensive',userAuth, surepassControllers.panComprehensive);
-router.post('/pan/aadhaar-link',userAuth, surepassControllers.aadhaarToPan);
-router.post('/aadhaar/verify',userAuth, surepassControllers.aadhaarVerification);
+/**
+ * @route   POST /api/v1/corporate/din
+ * @desc    Verify Director Identification Number (DIN)
+ * @access  Private
+ */
+router.post('/din-verification', 
+    userAuth, 
+    surepassController.verifyDIN
+);
 
 module.exports = router;

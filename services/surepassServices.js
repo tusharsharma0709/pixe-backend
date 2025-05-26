@@ -1,4 +1,4 @@
-// services/surepassServices.js - Updated with improved error handling and logging
+// services/surepassServices.js - Complete with new endpoints
 
 const axios = require('axios');
 const FormData = require('form-data');
@@ -48,15 +48,12 @@ const postJSON = async (endpoint, data) => {
     } catch (error) {
         console.error('SurePass API error:');
         if (error.response) {
-            // The server responded with a status code outside of 2xx
             console.error(`Status: ${error.response.status}`);
             console.error(`Data:`, error.response.data);
             console.error(`Headers:`, error.response.headers);
         } else if (error.request) {
-            // The request was made but no response was received
             console.error(`No response received:`, error.request);
         } else {
-            // Something happened in setting up the request
             console.error(`Error setting up request:`, error.message);
         }
         
@@ -110,14 +107,11 @@ const postFormData = async (endpoint, fileBuffer, fieldName = 'file') => {
     } catch (error) {
         console.error('SurePass API error (FormData):');
         if (error.response) {
-            // The server responded with a status code outside of 2xx
             console.error(`Status: ${error.response.status}`);
             console.error(`Data:`, error.response.data);
         } else if (error.request) {
-            // The request was made but no response was received
             console.error(`No response received:`, error.request);
         } else {
-            // Something happened in setting up the request
             console.error(`Error setting up request:`, error.message);
         }
         
@@ -137,14 +131,10 @@ const postFormData = async (endpoint, fileBuffer, fieldName = 'file') => {
  */
 const verifyAadhaar = async (aadhaarNumber, consent = 'Y') => {
     try {
-        // Clean the Aadhaar number - remove spaces and any non-numeric characters
         const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
-        
-        // Log the API call (without showing full Aadhaar number)
         const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
         console.log(`Verifying Aadhaar: ${maskedAadhaar} with consent: ${consent}`);
         
-        // Validate Aadhaar format
         if (cleanAadhaarNumber.length !== 12) {
             console.error('Invalid Aadhaar number format');
             return {
@@ -153,7 +143,6 @@ const verifyAadhaar = async (aadhaarNumber, consent = 'Y') => {
             };
         }
         
-        // Make API call to SurePass
         return await postJSON('/aadhaar-validation/aadhaar-validation', {
             id_number: cleanAadhaarNumber,
             consent
@@ -174,14 +163,10 @@ const verifyAadhaar = async (aadhaarNumber, consent = 'Y') => {
  */
 const generateAadhaarOTP = async (aadhaarNumber) => {
     try {
-        // Clean the Aadhaar number - remove spaces and any non-numeric characters
         const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
-        
-        // Log the API call (without showing full Aadhaar number)
         const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
         console.log(`Generating OTP for Aadhaar: ${maskedAadhaar}`);
         
-        // Validate Aadhaar format
         if (cleanAadhaarNumber.length !== 12) {
             console.error('Invalid Aadhaar number format');
             return {
@@ -190,45 +175,11 @@ const generateAadhaarOTP = async (aadhaarNumber) => {
             };
         }
         
-        // Make API call to SurePass
         const response = await postJSON('/aadhaar-v2/generate-otp', {
             id_number: cleanAadhaarNumber
         });
         
-        // Debug the response structure
         console.log('DEBUG: Full OTP generation response structure:', JSON.stringify(response, null, 2));
-        
-        // For debugging: Let's check all possible paths for client_id
-        if (response.success) {
-            let clientId = null;
-            
-            // Check direct path
-            if (response.data?.client_id) {
-                clientId = response.data.client_id;
-                console.log(`Found client_id at response.data.client_id: ${clientId}`);
-            }
-            // Check nested path
-            else if (response.data?.data?.client_id) {
-                clientId = response.data.data.client_id;
-                console.log(`Found client_id at response.data.data.client_id: ${clientId}`);
-            }
-            // Check if it's in a results array
-            else if (response.data?.results && Array.isArray(response.data.results) && response.data.results[0]?.client_id) {
-                clientId = response.data.results[0].client_id;
-                console.log(`Found client_id in results array: ${clientId}`);
-            }
-            
-            if (!clientId) {
-                console.error('Client ID not found in any expected location in the response');
-                console.log('Available keys in response.data:', Object.keys(response.data || {}));
-                if (response.data?.data) {
-                    console.log('Available keys in response.data.data:', Object.keys(response.data.data || {}));
-                }
-                
-                // Even though we didn't find client_id, return the original response
-                // to let the higher-level code handle this situation
-            }
-        }
         
         return response;
     } catch (error) {
@@ -248,7 +199,6 @@ const generateAadhaarOTP = async (aadhaarNumber) => {
  */
 const verifyAadhaarOTP = async (clientId, otp) => {
     try {
-        // Validate parameters
         if (!clientId || !otp) {
             console.error('Missing client_id or OTP');
             return {
@@ -260,13 +210,11 @@ const verifyAadhaarOTP = async (clientId, otp) => {
         console.log(`Verifying OTP for client ID: ${clientId}`);
         console.log(`OTP value: ${otp}`);
         
-        // Make API call to SurePass
         const response = await postJSON('/aadhaar-v2/submit-otp', {
             client_id: clientId,
             otp: otp
         });
         
-        // Debug the response structure
         console.log('DEBUG: Full OTP verification response structure:', JSON.stringify(response, null, 2));
         
         return response;
@@ -287,13 +235,10 @@ const verifyAadhaarOTP = async (clientId, otp) => {
  */
 const verifyPAN = async (panNumber, consent = 'Y') => {
     try {
-        // Clean the PAN number - remove spaces and convert to uppercase
         const cleanPanNumber = panNumber.replace(/\s/g, '').toUpperCase();
         
-        // Log the API call
         console.log(`Verifying PAN: ${cleanPanNumber} with consent: ${consent}`);
         
-        // Validate PAN format (10 characters, starts with letter, etc.)
         if (cleanPanNumber.length !== 10 || !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanPanNumber)) {
             console.error('Invalid PAN number format');
             return {
@@ -302,7 +247,6 @@ const verifyPAN = async (panNumber, consent = 'Y') => {
             };
         }
         
-        // Make API call to SurePass - Using id_number parameter
         return await postJSON('/pan/pan', {
             id_number: cleanPanNumber,
             consent
@@ -325,15 +269,12 @@ const verifyPAN = async (panNumber, consent = 'Y') => {
  */
 const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
     try {
-        // Clean the numbers
         const cleanAadhaarNumber = aadhaarNumber.replace(/\D/g, '');
         const cleanPanNumber = panNumber.replace(/\s/g, '').toUpperCase();
         
-        // Log the API call (without showing full Aadhaar number)
         const maskedAadhaar = maskAadhaarNumber(cleanAadhaarNumber);
         console.log(`Checking Aadhaar-PAN link: ${maskedAadhaar} with PAN: ${cleanPanNumber}`);
         
-        // Validate inputs
         if (cleanAadhaarNumber.length !== 12) {
             console.error('Invalid Aadhaar number format');
             return {
@@ -350,21 +291,16 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
             };
         }
         
-        // CRITICAL FIX: Use the exact parameters as shown in the logs
-        // From the logs, we see that API endpoint is "/pan/aadhaar-pan-link-check"
-        // And parameters are "aadhaar_number" and "consent" (where consent = PAN number)
         const requestBody = {
             aadhaar_number: cleanAadhaarNumber,
-            consent: cleanPanNumber // Based on the logs, 'consent' parameter is being used for PAN
+            consent: cleanPanNumber
         };
         
         console.log(`DEBUG: API endpoint: /pan/aadhaar-pan-link-check`);
         console.log(`DEBUG: Request body:`, JSON.stringify(requestBody, null, 2));
         
-        // Make API call to SurePass with correct endpoint from logs
         const result = await postJSON('/pan/aadhaar-pan-link-check', requestBody);
         
-        // Debug the response structure
         console.log('DEBUG: Full Aadhaar-PAN link response structure:', JSON.stringify(result, null, 2));
         
         return result;
@@ -387,11 +323,9 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
  */
 const verifyBankAccount = async (accountNumber, ifsc, accountHolderName = '', fetchIfscDetails = true) => {
     try {
-        // Clean inputs
         const cleanAccountNumber = accountNumber.replace(/\s/g, '');
         const cleanIfsc = ifsc.replace(/\s/g, '').toUpperCase();
         
-        // Validate inputs
         if (!cleanAccountNumber || !cleanIfsc) {
             console.error('Missing account number or IFSC code');
             return {
@@ -402,29 +336,130 @@ const verifyBankAccount = async (accountNumber, ifsc, accountHolderName = '', fe
         
         console.log(`Verifying bank account: ${cleanAccountNumber.substring(0, 4)}XXXX${cleanAccountNumber.slice(-4)} with IFSC: ${cleanIfsc}`);
         
-        // Prepare request payload
         const requestPayload = {
             id_number: cleanAccountNumber,
             ifsc: cleanIfsc,
             ifsc_details: fetchIfscDetails
         };
         
-        // Add account holder name if provided
         if (accountHolderName) {
             requestPayload.name = accountHolderName;
         }
         
         console.log(`DEBUG: Bank verification request payload:`, JSON.stringify(requestPayload, null, 2));
         
-        // Make API call to SurePass
         const response = await postJSON('/bank-verification/', requestPayload);
         
-        // Debug the response structure
         console.log('DEBUG: Full bank verification response structure:', JSON.stringify(response, null, 2));
         
         return response;
     } catch (error) {
         console.error('Bank account verification error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * NEW: Get RC details by chassis number
+ * @param {String} chassisNumber - Vehicle chassis number
+ * @returns {Promise} - API response
+ */
+const getChassisToRCDetails = async (chassisNumber) => {
+    try {
+        const cleanChassisNumber = chassisNumber.replace(/\s/g, '').toUpperCase();
+        
+        console.log(`Getting RC details for chassis: ${cleanChassisNumber}`);
+        
+        if (!cleanChassisNumber || cleanChassisNumber.length < 10) {
+            console.error('Invalid chassis number format');
+            return {
+                success: false,
+                error: 'Invalid chassis number format. Must be at least 10 characters.'
+            };
+        }
+        
+        const response = await postJSON('/rc/chassis-to-rc-details', {
+            chassis_number: cleanChassisNumber
+        });
+        
+        console.log('DEBUG: Full chassis to RC response structure:', JSON.stringify(response, null, 2));
+        
+        return response;
+    } catch (error) {
+        console.error('Chassis to RC details error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * NEW: Get company details by CIN
+ * @param {String} cin - Company Identification Number
+ * @returns {Promise} - API response
+ */
+const getCompanyDetails = async (cin) => {
+    try {
+        const cleanCIN = cin.replace(/\s/g, '').toUpperCase();
+        
+        console.log(`Getting company details for CIN: ${cleanCIN}`);
+        
+        if (!cleanCIN || cleanCIN.length < 15) {
+            console.error('Invalid CIN format');
+            return {
+                success: false,
+                error: 'Invalid CIN format. Must be at least 15 characters.'
+            };
+        }
+        
+        const response = await postJSON('/corporate/company-details', {
+            id_number: cleanCIN
+        });
+        
+        console.log('DEBUG: Full company details response structure:', JSON.stringify(response, null, 2));
+        
+        return response;
+    } catch (error) {
+        console.error('Company details error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * NEW: Verify DIN (Director Identification Number)
+ * @param {String} dinNumber - Director Identification Number
+ * @returns {Promise} - API response
+ */
+const verifyDIN = async (dinNumber) => {
+    try {
+        const cleanDIN = dinNumber.replace(/\s/g, '');
+        
+        console.log(`Verifying DIN: ${cleanDIN}`);
+        
+        if (!cleanDIN || cleanDIN.length !== 8 || !/^\d{8}$/.test(cleanDIN)) {
+            console.error('Invalid DIN format');
+            return {
+                success: false,
+                error: 'Invalid DIN format. Must be 8 digits.'
+            };
+        }
+        
+        const response = await postJSON('/corporate/din', {
+            id_number: cleanDIN
+        });
+        
+        console.log('DEBUG: Full DIN verification response structure:', JSON.stringify(response, null, 2));
+        
+        return response;
+    } catch (error) {
+        console.error('DIN verification error:', error);
         return {
             success: false,
             error: error.message
@@ -455,5 +490,10 @@ module.exports = {
     maskAadhaarNumber,
     generateAadhaarOTP,
     verifyAadhaarOTP,
-    verifyBankAccount
+    verifyBankAccount,
+    
+    // NEW: Export new functions
+    getChassisToRCDetails,
+    getCompanyDetails,
+    verifyDIN
 };

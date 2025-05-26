@@ -62,7 +62,11 @@ const workflowNodeSchema = new mongoose.Schema({
             'aadhaar-otp', 
             'aadhaar-verify', 
             'pan-verify',
-            'video-kyc'
+            'video-kyc',
+            // NEW: Add these 3 types
+            'chassis-to-rc',
+            'company-details', 
+            'din-verification'
         ]
     },
     // For banking verification nodes

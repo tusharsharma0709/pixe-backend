@@ -1,4 +1,4 @@
-// controllers/surepassControllers.js - Updated with Aadhaar OTP and Bank Verification
+// controllers/surepassControllers.js - Complete with new endpoints
 
 const surepassServices = require('../services/surepassServices');
 
@@ -42,10 +42,8 @@ const generateAadhaarOTP = async (req, res) => {
       });
     }
     
-    // Call the generateAadhaarOTP function from surepassServices
     const result = await surepassServices.generateAadhaarOTP(id_number);
     
-    // Return the API response
     res.status(result.success ? 200 : 400).json(result);
   } catch (err) {
     console.error(`Error in aadhaar-otp-generate:`, err.message || err);
@@ -67,10 +65,8 @@ const verifyAadhaarOTP = async (req, res) => {
       });
     }
     
-    // Call the verifyAadhaarOTP function from surepassServices
     const result = await surepassServices.verifyAadhaarOTP(client_id, otp);
     
-    // Return the API response
     res.status(result.success ? 200 : 400).json(result);
   } catch (err) {
     console.error(`Error in aadhaar-otp-verify:`, err.message || err);
@@ -92,16 +88,83 @@ const verifyBankAccount = async (req, res) => {
       });
     }
     
-    // Call the verifyBankAccount function from surepassServices
     const result = await surepassServices.verifyBankAccount(id_number, ifsc, name, ifsc_details);
     
-    // Return the API response
     res.status(result.success ? 200 : 400).json(result);
   } catch (err) {
     console.error(`Error in bank-account-verify:`, err.message || err);
     res.status(500).json({ 
       error: err.message || 'An error occurred during the API request',
       endpoint: '/bank-verification/' 
+    });
+  }
+};
+
+// NEW: Get RC details by chassis number
+const getChassisToRCDetails = async (req, res) => {
+  try {
+    const { chassis_number } = req.body;
+    
+    if (!chassis_number) {
+      return res.status(400).json({ 
+        error: 'Chassis number (chassis_number) is required' 
+      });
+    }
+    
+    const result = await surepassServices.getChassisToRCDetails(chassis_number);
+    
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in chassis-to-rc-details:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/rc/chassis-to-rc-details' 
+    });
+  }
+};
+
+// NEW: Get company details by CIN
+const getCompanyDetails = async (req, res) => {
+  try {
+    const { id_number } = req.body;
+    
+    if (!id_number) {
+      return res.status(400).json({ 
+        error: 'Company Identification Number (id_number) is required' 
+      });
+    }
+    
+    const result = await surepassServices.getCompanyDetails(id_number);
+    
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in company-details:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/corporate/company-details' 
+    });
+  }
+};
+
+// NEW: Verify DIN (Director Identification Number)
+const verifyDIN = async (req, res) => {
+  try {
+    const { id_number } = req.body;
+    
+    if (!id_number) {
+      return res.status(400).json({ 
+        error: 'Director Identification Number (id_number) is required' 
+      });
+    }
+    
+    const result = await surepassServices.verifyDIN(id_number);
+    
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in din-verification:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/corporate/din' 
     });
   }
 };
@@ -124,7 +187,7 @@ module.exports = {
   // Updated/added endpoints for KYC workflow
   panVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/pan/pan'),
   panComprehensive: (req, res) => handleJSONRequest(req, res, '/api/v1/pan/pan-comprehensive'),
-  aadhaarToPan: (req, res) => handleJSONRequest(req, res, '/api/v1/pan/aadhaar-pan-link-check'), // Renamed for clarity
+  aadhaarToPan: (req, res) => handleJSONRequest(req, res, '/api/v1/pan/aadhaar-pan-link-check'),
   panValidation: (req, res) => handleJSONRequest(req, res, '/api/v1/pan/validate'),
   aadhaarVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/aadhaar-validation/aadhaar-validation'),
   voterIdVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/voter-id/verify'),
@@ -149,8 +212,13 @@ module.exports = {
   udyamVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/udyam/verify'),
   iecVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/iec/verify'),
   
-  // New endpoints for Aadhaar OTP and Bank Account Verification
+  // Aadhaar OTP and Bank Account Verification
   generateAadhaarOTP,
   verifyAadhaarOTP,
-  verifyBankAccount
+  verifyBankAccount,
+  
+  // NEW: Added three new endpoints
+  getChassisToRCDetails,
+  getCompanyDetails,
+  verifyDIN
 };

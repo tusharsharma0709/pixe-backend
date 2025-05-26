@@ -128,11 +128,14 @@ const startServer = async () => {
             console.log('   • Real-time event broadcasting');
             
             console.log('\n🔐 SUREPASS ENDPOINTS SUPPORTED:');
-            console.log('   • /api/verification/aadhaar');
-            console.log('   • /api/verification/aadhaar-otp');
+            console.log('   • /api/verification/aadhaar-v2/generate-otp');
+            console.log('   • /api/verification/aadhaar-v2/submit-otp');
             console.log('   • /api/verification/pan');
             console.log('   • /api/verification/aadhaar-pan-link');
-            console.log('   • /api/verification/bank-account');
+            console.log('   • /api/verification/bank-verification');
+            console.log('   • /api/verification/chassis-to-rc-details');
+            console.log('   • /api/verification/company-details');
+            console.log('   • /api/verification/din-verification');
             
             console.log('\n✅ Server is ready to handle requests!');
             console.log('=' .repeat(60));

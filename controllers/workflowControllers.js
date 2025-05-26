@@ -6,15 +6,15 @@ const { ActivityLog } = require('../models/ActivityLogs');
 const { Notification } = require('../models/Notifications');
 const unifiedGtmService = require('../services/gtmTrackingServices');
 
-// SurePass endpoint mapping and validation
+// SurePass endpoint mapping and validation - UPDATED with new endpoints
 const SUREPASS_ENDPOINTS = {
-    '/api/verification/aadhaar': {
+    '/api/verification/aadhaar-v2/generate-otp': {
         name: 'Aadhaar Verification',
         method: 'POST',
         requiredParams: ['aadhaar_number'],
         description: 'Verify Aadhaar number using SurePass API'
     },
-    '/api/verification/aadhaar-otp': {
+    '/api/verification/aadhaar-v2/submit-otp': {
         name: 'Aadhaar OTP Verification', 
         method: 'POST',
         requiredParams: ['client_id', 'otp'],
@@ -32,11 +32,31 @@ const SUREPASS_ENDPOINTS = {
         requiredParams: ['aadhaar_number', 'pan_number'], 
         description: 'Check if Aadhaar and PAN are linked'
     },
-    '/api/verification/bank-account': {
+    '/api/verification/bank-verification': {
         name: 'Bank Account Verification',
         method: 'POST',
         requiredParams: ['account_number', 'ifsc'],
         description: 'Verify bank account using SurePass API'
+    },
+    
+    // NEW: Added three new endpoints
+    '/api/verification/chassis-to-rc-details': {
+        name: 'Chassis to RC Details',
+        method: 'POST',
+        requiredParams: ['chassis_number'],
+        description: 'Get RC details by vehicle chassis number using SurePass API'
+    },
+    '/api/verification/company-details': {
+        name: 'Company Details Verification',
+        method: 'POST',
+        requiredParams: ['cin_number'],
+        description: 'Get company details by CIN using SurePass API'
+    },
+    '/api/verification/din-verification': {
+        name: 'DIN Verification',
+        method: 'POST',
+        requiredParams: ['din_number'],
+        description: 'Verify Director Identification Number using SurePass API'
     }
 };
 
@@ -256,7 +276,7 @@ const WorkflowController = {
                 actorId: adminId,
                 actorModel: 'Admins',
                 actorName: admin ? `${admin.first_name} ${admin.last_name}` : null,
-                action: surePassProcessing.hasSurePassNodes ? 'kyc_workflow_created' : 'workflow_created',
+                action: surePassProcessing.hasSurePassNodes ? 'workflow_created' : 'workflow_created',
                 entityType: 'Workflow',
                 entityId: workflow._id,
                 description: `Created ${surePassProcessing.hasSurePassNodes ? 'KYC ' : ''}workflow: ${workflow.name}${surePassProcessing.hasSurePassNodes ? ` with ${surePassProcessing.surePassNodes.length} SurePass verification steps` : ''}`,
@@ -271,7 +291,7 @@ const WorkflowController = {
             await Notification.create({
                 title: "Workflow Created Successfully",
                 description: notificationMessage,
-                type: surePassProcessing.hasSurePassNodes ? 'kyc_workflow_created' : 'workflow_created',
+                type: surePassProcessing.hasSurePassNodes ? 'workflow_created' : 'workflow_created',
                 priority: 'low',
                 forAdmin: adminId,
                 relatedTo: {
@@ -391,7 +411,6 @@ const WorkflowController = {
 
             // Get admin details
             const admin = await Admin.findById(adminId);
-
             // AUTOMATIC TRACKING: Track workflow update
             try {
                 // Determine what changed
@@ -845,7 +864,6 @@ const WorkflowController = {
             });
         }
     },
-
     // Get available SurePass endpoints (helper for frontend)
     getSurePassEndpoints: async (req, res) => {
         try {
