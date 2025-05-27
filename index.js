@@ -136,6 +136,9 @@ const startServer = async () => {
             console.log('   • /api/verification/chassis-to-rc-details');
             console.log('   • /api/verification/company-details');
             console.log('   • /api/verification/din-verification');
+            console.log('   • /api/verification/fssai');
+            console.log('   • /api/verification/gstin');
+            console.log('   • /api/verification/icai');
             
             console.log('\n✅ Server is ready to handle requests!');
             console.log('=' .repeat(60));

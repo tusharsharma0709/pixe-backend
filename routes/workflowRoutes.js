@@ -3,6 +3,8 @@ const express = require('express');
 const router = express.Router();
 const WorkflowController = require('../controllers/workflowControllers');
 const { adminAuth, agentAuth } = require('../middlewares/auth');
+const { validateRequest } = require('../middlewares/validationMiddleware');
+const { body, param } = require('express-validator');
 
 // All routes require admin authentication
 
@@ -36,5 +38,30 @@ router.post('/:id/test', adminAuth, WorkflowController.testWorkflow);
 
 // Get workflow analytics (ENHANCED with unified analytics)
 router.get('/:id/analytics', adminAuth, WorkflowController.getWorkflowAnalytics);
+
+/**
+ * @route   POST /api/workflows/:id/preview
+ * @desc    Preview workflow execution with sample data
+ * @access  Private (Admin)
+ * @body    { sampleData?, startFromNodeId? }
+ */
+router.post('/:id/preview', 
+    adminAuth, 
+    [
+        param('id')
+            .isMongoId()
+            .withMessage('Invalid workflow ID'),
+        body('sampleData')
+            .optional()
+            .isObject()
+            .withMessage('Sample data must be an object'),
+        body('startFromNodeId')
+            .optional()
+            .isString()
+            .withMessage('Start node ID must be a string')
+    ],
+    validateRequest, 
+    WorkflowController.previewWorkflow
+);
 
 module.exports = router;

@@ -1211,6 +1211,69 @@ const WorkflowController = {
                 error: error.message
             });
         }
+    },
+    /**
+     * Preview workflow execution with sample data
+     */
+    previewWorkflow: async (req, res) => {
+        try {
+            const { id } = req.params;
+            const { sampleData = {}, startFromNodeId } = req.body;
+            const adminId = req.adminId;
+
+            const workflow = await Workflow.findOne({ _id: id, adminId });
+
+            if (!workflow) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Workflow not found"
+                });
+            }
+
+            // Import the preview service
+            const { previewWorkflowExecution } = require('../services/workflowExecutor');
+
+            // Preview the workflow execution
+            const previewResult = await previewWorkflowExecution(
+                workflow, 
+                sampleData, 
+                startFromNodeId || workflow.startNodeId
+            );
+
+            // Track workflow preview
+            try {
+                await unifiedGtmService.trackEvent({
+                    event_type: 'workflow_previewed',
+                    event_category: 'workflow_management',
+                    workflow_id: workflow._id,
+                    workflow_name: workflow.name,
+                    user_id: adminId,
+                    success: true,
+                    metadata: {
+                        preview_mode: true,
+                        sample_data_provided: Object.keys(sampleData).length > 0,
+                        start_node_id: startFromNodeId || workflow.startNodeId,
+                        execution_path_length: previewResult.executionPath?.length || 0
+                    }
+                });
+            } catch (trackingError) {
+                console.error('Error tracking workflow preview:', trackingError);
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: "Workflow preview generated successfully",
+                data: previewResult
+            });
+
+        } catch (error) {
+            console.error("Error previewing workflow:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error",
+                error: error.message
+            });
+        }
     }
 };
 

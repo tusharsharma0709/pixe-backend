@@ -1,4 +1,4 @@
-// services/workflowExecutor.js - Complete implementation with unified tracking
+// services/workflowExecutor.js - Complete implementation with unified tracking and preview functionality
 
 const { Message } = require('../models/Messages');
 const { Workflow } = require('../models/Workflows');
@@ -181,6 +181,311 @@ function generateSessionToken(session) {
     } catch (error) {
         console.error('Error generating session token:', error);
         return '';
+    }
+}
+
+/**
+ * PREVIEW WORKFLOW EXECUTION - NEW FUNCTION
+ * Simulate workflow execution without actually sending messages or making API calls
+ */
+async function previewWorkflowExecution(workflow, sampleData = {}, startNodeId = null) {
+    try {
+        console.log(`🔍 Previewing workflow: ${workflow.name}`);
+        
+        const previewResult = {
+            workflowId: workflow._id,
+            workflowName: workflow.name,
+            startNodeId: startNodeId || workflow.startNodeId,
+            sampleData,
+            executionPath: [],
+            messages: [],
+            conditions: [],
+            apiCalls: [],
+            variables: { ...sampleData },
+            warnings: [],
+            errors: [],
+            totalNodes: workflow.nodes.length,
+            executedNodes: 0,
+            estimatedDuration: 0,
+            preview: true
+        };
+
+        const visitedNodes = new Set();
+        const MAX_PREVIEW_STEPS = 50; // Prevent infinite loops
+        
+        await previewNode(
+            workflow, 
+            startNodeId || workflow.startNodeId, 
+            previewResult, 
+            visitedNodes, 
+            0, 
+            MAX_PREVIEW_STEPS
+        );
+
+        // Generate summary
+        previewResult.summary = {
+            totalSteps: previewResult.executionPath.length,
+            messageCount: previewResult.messages.length,
+            conditionCount: previewResult.conditions.length,
+            apiCallCount: previewResult.apiCalls.length,
+            variableCount: Object.keys(previewResult.variables).length,
+            hasWarnings: previewResult.warnings.length > 0,
+            hasErrors: previewResult.errors.length > 0,
+            estimatedExecutionTime: `${previewResult.estimatedDuration} seconds`
+        };
+
+        return previewResult;
+
+    } catch (error) {
+        console.error('Error in workflow preview:', error);
+        return {
+            success: false,
+            error: error.message,
+            preview: true
+        };
+    }
+}
+
+/**
+ * Preview individual node execution
+ */
+async function previewNode(workflow, nodeId, previewResult, visitedNodes, depth, maxDepth) {
+    if (depth >= maxDepth) {
+        previewResult.warnings.push({
+            type: 'max_depth_reached',
+            message: `Maximum preview depth (${maxDepth}) reached. Possible infinite loop.`,
+            nodeId
+        });
+        return;
+    }
+
+    if (visitedNodes.has(`${nodeId}_${depth}`)) {
+        previewResult.warnings.push({
+            type: 'circular_reference',
+            message: `Circular reference detected at node ${nodeId}`,
+            nodeId
+        });
+        return;
+    }
+
+    visitedNodes.add(`${nodeId}_${depth}`);
+
+    const node = workflow.nodes.find(n => n.nodeId === nodeId);
+    if (!node) {
+        previewResult.errors.push({
+            type: 'node_not_found',
+            message: `Node ${nodeId} not found in workflow`,
+            nodeId
+        });
+        return;
+    }
+
+    const stepStart = Date.now();
+    
+    // Add to execution path
+    previewResult.executionPath.push({
+        nodeId: node.nodeId,
+        nodeName: node.name,
+        nodeType: node.type,
+        timestamp: new Date().toISOString(),
+        depth,
+        variables: { ...previewResult.variables }
+    });
+
+    previewResult.executedNodes++;
+
+    let nextNodeId = null;
+
+    switch (node.type) {
+        case 'message':
+            const messageContent = processTemplate(node.content, previewResult.variables);
+            previewResult.messages.push({
+                nodeId: node.nodeId,
+                nodeName: node.name,
+                content: messageContent,
+                originalContent: node.content,
+                processed: messageContent !== node.content,
+                messageType: 'text',
+                estimatedDelay: 2 // seconds
+            });
+            previewResult.estimatedDuration += 2;
+            nextNodeId = node.nextNodeId;
+            break;
+
+        case 'interactive':
+            const interactiveContent = processTemplate(node.content, previewResult.variables);
+            const buttons = node.options || node.buttons || [];
+            
+            previewResult.messages.push({
+                nodeId: node.nodeId,
+                nodeName: node.name,
+                content: interactiveContent,
+                originalContent: node.content,
+                processed: interactiveContent !== node.content,
+                messageType: 'interactive',
+                buttons: buttons.map(btn => ({
+                    text: btn.text || btn.label,
+                    value: btn.value || btn.id
+                })),
+                estimatedDelay: 3
+            });
+            
+            previewResult.estimatedDuration += 3;
+            
+            // For preview, simulate user selecting first option
+            if (buttons.length > 0 && node.variableName) {
+                const firstOption = buttons[0];
+                const selectedValue = firstOption.value || firstOption.id || firstOption.text;
+                previewResult.variables[node.variableName] = selectedValue;
+                
+                previewResult.warnings.push({
+                    type: 'simulated_user_input',
+                    message: `Simulated user selecting: "${selectedValue}" for variable "${node.variableName}"`,
+                    nodeId: node.nodeId
+                });
+            }
+            
+            nextNodeId = node.nextNodeId;
+            break;
+
+        case 'input':
+            if (node.content) {
+                const promptContent = processTemplate(node.content, previewResult.variables);
+                previewResult.messages.push({
+                    nodeId: node.nodeId,
+                    nodeName: node.name,
+                    content: promptContent,
+                    originalContent: node.content,
+                    processed: promptContent !== node.content,
+                    messageType: 'input_prompt',
+                    estimatedDelay: 1,
+                    waitingForInput: true
+                });
+                previewResult.estimatedDuration += 1;
+            }
+
+            // Simulate user input if not already provided
+            if (node.variableName && !previewResult.variables[node.variableName]) {
+                const simulatedInput = `sample_${node.variableName}`;
+                previewResult.variables[node.variableName] = simulatedInput;
+                
+                previewResult.warnings.push({
+                    type: 'simulated_user_input',
+                    message: `Simulated user input: "${simulatedInput}" for variable "${node.variableName}"`,
+                    nodeId: node.nodeId
+                });
+            }
+            
+            nextNodeId = node.nextNodeId;
+            break;
+
+        case 'condition':
+            const conditionResult = evaluateCondition(node.condition, previewResult.variables);
+            
+            previewResult.conditions.push({
+                nodeId: node.nodeId,
+                nodeName: node.name,
+                condition: node.condition,
+                result: conditionResult,
+                variables: { ...previewResult.variables },
+                trueNodeId: node.trueNodeId,
+                falseNodeId: node.falseNodeId
+            });
+
+            previewResult.variables[`${node.nodeId}_result`] = conditionResult;
+            nextNodeId = conditionResult ? node.trueNodeId : node.falseNodeId;
+            
+            if (!nextNodeId) {
+                previewResult.errors.push({
+                    type: 'missing_condition_path',
+                    message: `No ${conditionResult ? 'true' : 'false'} path defined for condition`,
+                    nodeId: node.nodeId
+                });
+            }
+            break;
+
+        case 'api':
+            const apiCall = {
+                nodeId: node.nodeId,
+                nodeName: node.name,
+                endpoint: node.apiEndpoint,
+                method: node.apiMethod || 'GET',
+                params: {},
+                estimatedDelay: 3,
+                simulated: true
+            };
+
+            // Process API parameters
+            if (node.apiParams) {
+                for (const [key, value] of Object.entries(node.apiParams)) {
+                    if (typeof value === 'string' && value.includes('{{')) {
+                        apiCall.params[key] = processTemplate(value, previewResult.variables);
+                    } else {
+                        apiCall.params[key] = value;
+                    }
+                }
+            }
+
+            // Simulate API response based on endpoint type
+            if (node.apiEndpoint && node.apiEndpoint.includes('verification')) {
+                // Simulate verification API response
+                const verificationType = node.apiEndpoint.split('/').pop();
+                apiCall.simulatedResponse = {
+                    success: true,
+                    data: {
+                        verified: true,
+                        verification_type: verificationType,
+                        timestamp: new Date().toISOString()
+                    }
+                };
+
+                // Add simulated verification data to variables
+                previewResult.variables[`${verificationType}_verified`] = true;
+                previewResult.variables[`${verificationType}_result`] = apiCall.simulatedResponse;
+            } else {
+                // Generic API response simulation
+                apiCall.simulatedResponse = {
+                    success: true,
+                    data: { message: 'Simulated API response' }
+                };
+            }
+
+            previewResult.apiCalls.push(apiCall);
+            previewResult.estimatedDuration += 3;
+            nextNodeId = node.nextNodeId;
+            break;
+
+        case 'end':
+            previewResult.messages.push({
+                nodeId: node.nodeId,
+                nodeName: node.name,
+                content: 'Workflow completed',
+                messageType: 'system',
+                isEndNode: true
+            });
+            return; // End execution
+
+        default:
+            previewResult.warnings.push({
+                type: 'unsupported_node_type',
+                message: `Unsupported node type: ${node.type}`,
+                nodeId: node.nodeId
+            });
+            nextNodeId = node.nextNodeId;
+    }
+
+    const stepDuration = Date.now() - stepStart;
+    previewResult.executionPath[previewResult.executionPath.length - 1].executionTime = stepDuration;
+
+    // Continue to next node
+    if (nextNodeId) {
+        await previewNode(workflow, nextNodeId, previewResult, visitedNodes, depth + 1, maxDepth);
+    } else if (node.type !== 'end') {
+        previewResult.warnings.push({
+            type: 'no_next_node',
+            message: `No next node defined for ${node.type} node`,
+            nodeId: node.nodeId
+        });
     }
 }
 
@@ -648,6 +953,22 @@ async function executeWorkflowNode(session, nodeId) {
                                 session.markModified('data');
                                 await session.save();
                                 
+                                // Save to Verification model
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'aadhaar',
+                                    verificationData: {
+                                        aadhaar_number: result.data?.aadhaar_number,
+                                        name: result.data?.name,
+                                        raw_response: result.data
+                                    },
+                                    status: result.success ? 'verified' : 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass'
+                                });
+                                
                                 // UNIFIED: Track KYC step using unified service
                                 try {
                                     const user = await User.findById(session.userId);
@@ -677,6 +998,19 @@ async function executeWorkflowNode(session, nodeId) {
                                 session.data.isAadhaarVerified = false;
                                 session.markModified('data');
                                 await session.save();
+                                
+                                // Save failed verification
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'aadhaar',
+                                    verificationData: { error_message: kycError.message },
+                                    status: 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass',
+                                    errorDetails: kycError.message
+                                });
                                 
                                 // UNIFIED: Track failed KYC step
                                 try {
@@ -727,6 +1061,22 @@ async function executeWorkflowNode(session, nodeId) {
                                 session.markModified('data');
                                 await session.save();
                                 
+                                // Save to Verification model
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'pan',
+                                    verificationData: {
+                                        pan_number: result.data?.pan_number,
+                                        name: result.data?.name,
+                                        raw_response: result.data
+                                    },
+                                    status: result.success ? 'verified' : 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass'
+                                });
+                                
                                 // UNIFIED: Track PAN verification
                                 try {
                                     const user = await User.findById(session.userId);
@@ -756,6 +1106,19 @@ async function executeWorkflowNode(session, nodeId) {
                                 session.data.isPanVerified = false;
                                 session.markModified('data');
                                 await session.save();
+                                
+                                // Save failed verification
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'pan',
+                                    verificationData: { error_message: kycError.message },
+                                    status: 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass',
+                                    errorDetails: kycError.message
+                                });
                                 
                                 // UNIFIED: Track failed PAN verification
                                 try {
@@ -806,6 +1169,23 @@ async function executeWorkflowNode(session, nodeId) {
                                 session.markModified('data');
                                 await session.save();
                                 
+                                // Save to Verification model
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'bank_account',
+                                    verificationData: {
+                                        account_number: result.data?.account_number,
+                                        ifsc: result.data?.ifsc,
+                                        account_holder_name: result.data?.account_holder_name,
+                                        raw_response: result.data
+                                    },
+                                    status: result.success ? 'verified' : 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass'
+                                });
+                                
                                 // UNIFIED: Track bank verification
                                 try {
                                     const user = await User.findById(session.userId);
@@ -836,6 +1216,19 @@ async function executeWorkflowNode(session, nodeId) {
                                 session.markModified('data');
                                 await session.save();
                                 
+                                // Save failed verification
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'bank_account',
+                                    verificationData: { error_message: kycError.message },
+                                    status: 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass',
+                                    errorDetails: kycError.message
+                                });
+                                
                                 // UNIFIED: Track failed bank verification
                                 try {
                                     const user = await User.findById(session.userId);
@@ -865,263 +1258,28 @@ async function executeWorkflowNode(session, nodeId) {
                                 throw kycError;
                             }
                         }
-                        // NEW: Handle chassis to RC verification
-                        else if (node.apiEndpoint === '/api/verification/chassis-to-rc') {
-                            console.log('  🔍 Special handling for SurePass Chassis to RC verification');
-                            
-                            try {
-                                const kycWorkflowHandlers = require('./kycWorkflowHandlers');
-                                const result = await kycWorkflowHandlers.verifyChassisToRC(session._id);
-                                console.log('  Chassis to RC verification result:', result);
-                                
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = result.success;
-                                
-                                session.data.chassisVerificationResult = result;
-                                session.data.isChassisVerified = result.success;
-                                if (result.success && result.data) {
-                                    session.data.rcNumber = result.data.rcNumber;
-                                    session.data.ownerName = result.data.ownerName;
-                                    session.data.vehicleModel = result.data.vehicleModel;
-                                }
-                                session.markModified('data');
-                                await session.save();
-                                
-                                // UNIFIED: Track chassis verification using unified service
-                                try {
-                                    const user = await User.findById(session.userId);
-                                    if (user) {
-                                        await unifiedGtmService.trackKycStep(
-                                            user, 
-                                            'chassis_to_rc', 
-                                            result.success, 
-                                            {
-                                                session: session,
-                                                execution_time_ms: apiResponseTime,
-                                                verification_type: 'api_verification',
-                                                provider: 'surepass',
-                                                api_endpoint: node.apiEndpoint
-                                            }
-                                        );
-                                    }
-                                } catch (gtmError) {
-                                    console.error('Unified GTM tracking error:', gtmError);
-                                }
-                                
-                            } catch (kycError) {
-                                console.error('Error verifying chassis to RC:', kycError);
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = false;
-                                
-                                session.data.isChassisVerified = false;
-                                session.markModified('data');
-                                await session.save();
-                                
-                                // UNIFIED: Track failed chassis verification
-                                try {
-                                    const user = await User.findById(session.userId);
-                                    if (user) {
-                                        await unifiedGtmService.trackKycStep(
-                                            user, 
-                                            'chassis_to_rc', 
-                                            false, 
-                                            {
-                                                session: session,
-                                                execution_time_ms: apiResponseTime,
-                                                error: kycError.message,
-                                                api_endpoint: node.apiEndpoint
-                                            }
-                                        );
-                                    }
-                                } catch (gtmError) {
-                                    console.error('Unified GTM tracking error:', gtmError);
-                                }
-                                
-                                executionSuccess = false;
-                                executionError = kycError.message;
-                                
-                                if (node.errorNodeId) {
-                                    return executeWorkflowNode(session, node.errorNodeId);
-                                }
-                                throw kycError;
-                            }
-                        }
-                        // NEW: Handle company details verification
-                        else if (node.apiEndpoint === '/api/verification/company-details') {
-                            console.log('  🔍 Special handling for SurePass Company Details verification');
-                            
-                            try {
-                                const kycWorkflowHandlers = require('./kycWorkflowHandlers');
-                                const result = await kycWorkflowHandlers.verifyCompanyDetails(session._id);
-                                console.log('  Company details verification result:', result);
-                                
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = result.success;
-                                
-                                session.data.companyVerificationResult = result;
-                                session.data.isCompanyVerified = result.success;
-                                if (result.success && result.data) {
-                                    session.data.companyName = result.data.companyName;
-                                    session.data.companyStatus = result.data.companyStatus;
-                                    session.data.cinNumber = result.data.cinNumber;
-                                }
-                                session.markModified('data');
-                                await session.save();
-                                
-                                // UNIFIED: Track company verification using unified service
-                                try {
-                                    const user = await User.findById(session.userId);
-                                    if (user) {
-                                        await unifiedGtmService.trackKycStep(
-                                            user, 
-                                            'company_details', 
-                                            result.success, 
-                                            {
-                                                session: session,
-                                                execution_time_ms: apiResponseTime,
-                                                verification_type: 'api_verification',
-                                                provider: 'surepass',
-                                                api_endpoint: node.apiEndpoint
-                                            }
-                                        );
-                                    }
-                                } catch (gtmError) {
-                                    console.error('Unified GTM tracking error:', gtmError);
-                                }
-                                
-                            } catch (kycError) {
-                                console.error('Error verifying company details:', kycError);
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = false;
-                                
-                                session.data.isCompanyVerified = false;
-                                session.markModified('data');
-                                await session.save();
-                                
-                                // UNIFIED: Track failed company verification
-                                try {
-                                    const user = await User.findById(session.userId);
-                                    if (user) {
-                                        await unifiedGtmService.trackKycStep(
-                                            user, 
-                                            'company_details', 
-                                            false, 
-                                            {
-                                                session: session,
-                                                execution_time_ms: apiResponseTime,
-                                                error: kycError.message,
-                                                api_endpoint: node.apiEndpoint
-                                            }
-                                        );
-                                    }
-                                } catch (gtmError) {
-                                    console.error('Unified GTM tracking error:', gtmError);
-                                }
-                                
-                                executionSuccess = false;
-                                executionError = kycError.message;
-                                
-                                if (node.errorNodeId) {
-                                    return executeWorkflowNode(session, node.errorNodeId);
-                                }
-                                throw kycError;
-                            }
-                        }
-                        // NEW: Handle DIN verification
-                        else if (node.apiEndpoint === '/api/verification/din-verification') {
-                            console.log('  🔍 Special handling for SurePass DIN verification');
-                            
-                            try {
-                                const kycWorkflowHandlers = require('./kycWorkflowHandlers');
-                                const result = await kycWorkflowHandlers.verifyDIN(session._id);
-                                console.log('  DIN verification result:', result);
-                                
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = result.success;
-                                
-                                session.data.dinVerificationResult = result;
-                                session.data.isDinVerified = result.success;
-                                if (result.success && result.data) {
-                                    session.data.directorName = result.data.directorName;
-                                    session.data.directorNationality = result.data.nationality;
-                                    session.data.dinNumber = result.data.dinNumber;
-                                }
-                                session.markModified('data');
-                                await session.save();
-                                
-                                // UNIFIED: Track DIN verification using unified service
-                                try {
-                                    const user = await User.findById(session.userId);
-                                    if (user) {
-                                        await unifiedGtmService.trackKycStep(
-                                            user, 
-                                            'din_verification', 
-                                            result.success, 
-                                            {
-                                                session: session,
-                                                execution_time_ms: apiResponseTime,
-                                                verification_type: 'api_verification',
-                                                provider: 'surepass',
-                                                api_endpoint: node.apiEndpoint
-                                            }
-                                        );
-                                    }
-                                } catch (gtmError) {
-                                    console.error('Unified GTM tracking error:', gtmError);
-                                }
-                                
-                            } catch (kycError) {
-                                console.error('Error verifying DIN:', kycError);
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = false;
-                                
-                                session.data.isDinVerified = false;
-                                session.markModified('data');
-                                await session.save();
-                                
-                                // UNIFIED: Track failed DIN verification
-                                try {
-                                    const user = await User.findById(session.userId);
-                                    if (user) {
-                                        await unifiedGtmService.trackKycStep(
-                                            user, 
-                                            'din_verification', 
-                                            false, 
-                                            {
-                                                session: session,
-                                                execution_time_ms: apiResponseTime,
-                                                error: kycError.message,
-                                                api_endpoint: node.apiEndpoint
-                                            }
-                                        );
-                                    }
-                                } catch (gtmError) {
-                                    console.error('Unified GTM tracking error:', gtmError);
-                                }
-                                
-                                executionSuccess = false;
-                                executionError = kycError.message;
-                                
-                                if (node.errorNodeId) {
-                                    return executeWorkflowNode(session, node.errorNodeId);
-                                }
-                                throw kycError;
-                            }
-                        }
-                        // Example: FSSAI Verification Storage
+                        // Handle FSSAI verification
                         else if (node.apiEndpoint === '/api/verification/fssai') {
+                            console.log('  🔍 Special handling for SurePass FSSAI verification');
+                            
                             try {
                                 const kycWorkflowHandlers = require('./kycWorkflowHandlers');
                                 const result = await kycWorkflowHandlers.verifyFSSAI(session._id);
+                                console.log('  FSSAI verification result:', result);
                                 
-                                // Store in session (temporary)
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
                                 session.data.fssaiVerificationResult = result;
                                 session.data.isFssaiVerified = result.success;
-                                // ... other session data
+                                if (result.success && result.data) {
+                                    session.data.fssaiNumber = result.data.fssai_number;
+                                    session.data.companyName = result.data.details?.[0]?.company_name;
+                                }
                                 session.markModified('data');
                                 await session.save();
                                 
-                                // ALSO store in Verification model (permanent)
+                                // Save to Verification model
                                 await Verification.create({
                                     userId: session.userId,
                                     verificationType: 'fssai',
@@ -1129,65 +1287,6 @@ async function executeWorkflowNode(session, nodeId) {
                                         fssai_number: result.data?.fssai_number,
                                         company_name: result.data?.details?.[0]?.company_name,
                                         license_status: result.data?.details?.[0]?.status_desc,
-                                        license_category: result.data?.details?.[0]?.license_category_name,
-                                        address: result.data?.details?.[0]?.address,
-                                        state_name: result.data?.details?.[0]?.state_name,
-                                        raw_response: result.data // Store full API response
-                                    },
-                                    status: result.success ? 'verified' : 'failed',
-                                    sessionId: session._id,
-                                    workflowId: session.workflowId,
-                                    verifiedAt: new Date(),
-                                    provider: 'surepass',
-                                    apiEndpoint: 'https://kyc-api.surepass.io/api/v1/corporate/fssai'
-                                });
-                                
-                                console.log('✅ FSSAI verification saved to database');
-                                
-                            } catch (error) {
-                                // Also store failed verifications
-                                await Verification.create({
-                                    userId: session.userId,
-                                    verificationType: 'fssai',
-                                    verificationData: {
-                                        error_message: error.message,
-                                        attempted_fssai_number: session.data.id_number
-                                    },
-                                    status: 'failed',
-                                    sessionId: session._id,
-                                    workflowId: session.workflowId,
-                                    verifiedAt: new Date(),
-                                    provider: 'surepass',
-                                    errorDetails: error.message
-                                });
-                            }
-                        }
-
-                        // Example: GSTIN Verification Storage
-                        else if (node.apiEndpoint === '/api/verification/gstin') {
-                            try {
-                                const result = await kycWorkflowHandlers.verifyGSTIN(session._id);
-                                
-                                // Session storage
-                                session.data.gstinVerificationResult = result;
-                                // ... other session data
-                                await session.save();
-                                
-                                // Verification model storage
-                                await Verification.create({
-                                    userId: session.userId,
-                                    verificationType: 'gstin',
-                                    verificationData: {
-                                        gstin: result.data?.gstin,
-                                        pan_number: result.data?.pan_number,
-                                        business_name: result.data?.business_name,
-                                        legal_name: result.data?.legal_name,
-                                        gstin_status: result.data?.gstin_status,
-                                        date_of_registration: result.data?.date_of_registration,
-                                        constitution_of_business: result.data?.constitution_of_business,
-                                        taxpayer_type: result.data?.taxpayer_type,
-                                        address: result.data?.address,
-                                        nature_bus_activities: result.data?.nature_bus_activities,
                                         raw_response: result.data
                                     },
                                     status: result.success ? 'verified' : 'failed',
@@ -1197,31 +1296,123 @@ async function executeWorkflowNode(session, nodeId) {
                                     provider: 'surepass'
                                 });
                                 
-                            } catch (error) {
+                            } catch (kycError) {
+                                console.error('Error verifying FSSAI:', kycError);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                
+                                session.data.isFssaiVerified = false;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // Save failed verification
                                 await Verification.create({
                                     userId: session.userId,
-                                    verificationType: 'gstin',
-                                    verificationData: { error_message: error.message },
+                                    verificationType: 'fssai',
+                                    verificationData: { error_message: kycError.message },
                                     status: 'failed',
                                     sessionId: session._id,
                                     workflowId: session.workflowId,
                                     verifiedAt: new Date(),
                                     provider: 'surepass',
-                                    errorDetails: error.message
+                                    errorDetails: kycError.message
                                 });
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw kycError;
                             }
                         }
-
-                        // Example: ICAI Verification Storage
-                        else if (node.apiEndpoint === '/api/verification/icai') {
+                        // Handle GSTIN verification
+                        else if (node.apiEndpoint === '/api/verification/gstin') {
+                            console.log('  🔍 Special handling for SurePass GSTIN verification');
+                            
                             try {
-                                const result = await kycWorkflowHandlers.verifyICAI(session._id);
+                                const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                                const result = await kycWorkflowHandlers.verifyGSTIN(session._id);
+                                console.log('  GSTIN verification result:', result);
                                 
-                                // Session storage
-                                session.data.icaiVerificationResult = result;
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.gstinVerificationResult = result;
+                                session.data.isGstinVerified = result.success;
+                                if (result.success && result.data) {
+                                    session.data.gstin = result.data.gstin;
+                                    session.data.businessName = result.data.business_name;
+                                }
+                                session.markModified('data');
                                 await session.save();
                                 
-                                // Verification model storage
+                                // Save to Verification model
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'gstin',
+                                    verificationData: {
+                                        gstin: result.data?.gstin,
+                                        business_name: result.data?.business_name,
+                                        legal_name: result.data?.legal_name,
+                                        gstin_status: result.data?.gstin_status,
+                                        raw_response: result.data
+                                    },
+                                    status: result.success ? 'verified' : 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass'
+                                });
+                                
+                            } catch (kycError) {
+                                console.error('Error verifying GSTIN:', kycError);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                
+                                session.data.isGstinVerified = false;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // Save failed verification
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'gstin',
+                                    verificationData: { error_message: kycError.message },
+                                    status: 'failed',
+                                    sessionId: session._id,
+                                    workflowId: session.workflowId,
+                                    verifiedAt: new Date(),
+                                    provider: 'surepass',
+                                    errorDetails: kycError.message
+                                });
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw kycError;
+                            }
+                        }
+                        // Handle ICAI verification
+                        else if (node.apiEndpoint === '/api/verification/icai') {
+                            console.log('  🔍 Special handling for SurePass ICAI verification');
+                            
+                            try {
+                                const kycWorkflowHandlers = require('./kycWorkflowHandlers');
+                                const result = await kycWorkflowHandlers.verifyICAI(session._id);
+                                console.log('  ICAI verification result:', result);
+                                
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.icaiVerificationResult = result;
+                                session.data.isIcaiVerified = result.success;
+                                if (result.success && result.data) {
+                                    session.data.membershipNumber = result.data.membership_number;
+                                    session.data.memberName = result.data.details?.member_name;
+                                }
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // Save to Verification model
                                 await Verification.create({
                                     userId: session.userId,
                                     verificationType: 'icai',
@@ -1229,11 +1420,6 @@ async function executeWorkflowNode(session, nodeId) {
                                         membership_number: result.data?.membership_number,
                                         member_name: result.data?.details?.member_name,
                                         member_status: result.data?.details?.member_status,
-                                        cop_status: result.data?.details?.cop_status,
-                                        associate_or_fellow: result.data?.details?.associate_or_fellow,
-                                        gender: result.data?.details?.gender,
-                                        professional_address: result.data?.details?.professional_address,
-                                        professional_region: result.data?.details?.professional_region,
                                         raw_response: result.data
                                     },
                                     status: result.success ? 'verified' : 'failed',
@@ -1243,18 +1429,32 @@ async function executeWorkflowNode(session, nodeId) {
                                     provider: 'surepass'
                                 });
                                 
-                            } catch (error) {
+                            } catch (kycError) {
+                                console.error('Error verifying ICAI:', kycError);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                
+                                session.data.isIcaiVerified = false;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // Save failed verification
                                 await Verification.create({
                                     userId: session.userId,
                                     verificationType: 'icai',
-                                    verificationData: { error_message: error.message },
+                                    verificationData: { error_message: kycError.message },
                                     status: 'failed',
                                     sessionId: session._id,
                                     workflowId: session.workflowId,
                                     verifiedAt: new Date(),
                                     provider: 'surepass',
-                                    errorDetails: error.message
+                                    errorDetails: kycError.message
                                 });
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw kycError;
                             }
                         }
                         else {
@@ -1409,6 +1609,7 @@ async function executeWorkflowNode(session, nodeId) {
             await unifiedGtmService.trackNodeExecution(
                 session, 
                 node, 
+                executionTime, 
                 executionSuccess, 
                 executionError
             );
@@ -1494,5 +1695,6 @@ module.exports = {
     processWorkflowInput,
     startWorkflowExecution,
     evaluateCondition,
-    processTemplate
+    processTemplate,
+    previewWorkflowExecution // Export the new preview function
 };
