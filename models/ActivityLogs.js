@@ -81,7 +81,7 @@ const activityLogSchema = new mongoose.Schema({
             'dtmf_sent',
             
             // Campaign actions
-            'campaign_request',
+            'campaign_requested',
             'campaign_updated',
             'campaign_deleted',
             'campaign_started',
