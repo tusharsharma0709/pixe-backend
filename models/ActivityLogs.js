@@ -27,6 +27,13 @@ const activityLogSchema = new mongoose.Schema({
         type: String,
         required: true,
         enum: [
+            // Authentication
+            'login', 
+            'logout', 
+            'register', 
+            'password_change', 
+            'password_reset',
+
             // User management actions
             'user_created',
             'user_updated', 
