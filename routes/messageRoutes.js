@@ -28,4 +28,18 @@ router.get('/webhook/receive',
     MessageController.verifyWebhook
 );
 
+// Add GET route for webhook verification
+router.get('/recent-chats', 
+    adminAuth,
+    // Pass to controller
+    MessageController.recentChats
+);
+
+// Add GET route for webhook verification
+router.get('/chats/:id', 
+    adminAuth,
+    // Pass to controller
+    MessageController.getChats
+);
+
 module.exports = router;

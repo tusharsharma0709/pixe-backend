@@ -207,6 +207,219 @@ const MessageController = {
         }
     },
 
+    recentChats: async (req, res) => {
+        try {
+            const  adminId  = req.adminId;
+            console.log(adminId)
+            const { page = 1, limit = 20 } = req.query;
+    
+            // Aggregate pipeline to get the most recent message from each user
+            const recentChats = await Message.aggregate([
+                {
+                    // Match messages where admin is involved (either as sender or recipient)
+                    $match: {
+                        $or: [
+                            { adminId: new mongoose.Types.ObjectId(adminId) },
+                            { sender: 'admin', adminId: new mongoose.Types.ObjectId(adminId) }
+                        ],
+                        isDeleted: false
+                    }
+                },
+                {
+                    // Sort by creation time (newest first) to get recent messages first
+                    $sort: { createdAt: -1 }
+                },
+                {
+                    // Group by userId to get the most recent message per user
+                    $group: {
+                        _id: '$userId',
+                        lastMessage: { $first: '$$ROOT' },
+                        unreadCount: {
+                            $sum: {
+                                $cond: [
+                                    {
+                                        $and: [
+                                            { $ne: ['$sender', 'admin'] },
+                                            { $eq: ['$status', 'delivered'] },
+                                            { $eq: ['$readAt', null] }
+                                        ]
+                                    },
+                                    1,
+                                    0
+                                ]
+                            }
+                        }
+                    }
+                },
+                {
+                    // Sort by last message time (newest conversations first)
+                    $sort: { 'lastMessage.createdAt': -1 }
+                },
+                {
+                    // Pagination
+                    $skip: (page - 1) * parseInt(limit)
+                },
+                {
+                    $limit: parseInt(limit)
+                },
+                {
+                    // Populate user details
+                    $lookup: {
+                        from: 'users',
+                        localField: '_id',
+                        foreignField: '_id',
+                        as: 'user'
+                    }
+                },
+                {
+                    // Populate session details
+                    $lookup: {
+                        from: 'usersessions',
+                        localField: 'lastMessage.sessionId',
+                        foreignField: '_id',
+                        as: 'session'
+                    }
+                },
+                {
+                    // Project the final structure
+                    $project: {
+                        _id: 0,
+                        userId: '$_id',
+                        user: { $arrayElemAt: ['$user', 0] },
+                        session: { $arrayElemAt: ['$session', 0] },
+                        lastMessage: {
+                            _id: '$lastMessage._id',
+                            content: '$lastMessage.content',
+                            messageType: '$lastMessage.messageType',
+                            sender: '$lastMessage.sender',
+                            status: '$lastMessage.status',
+                            createdAt: '$lastMessage.createdAt',
+                            mediaUrl: '$lastMessage.mediaUrl',
+                            mediaType: '$lastMessage.mediaType'
+                        },
+                        unreadCount: 1
+                    }
+                }
+            ]);
+    
+            // Get total count for pagination
+            const totalCount = await Message.aggregate([
+                {
+                    $match: {
+                        $or: [
+                            { adminId: new mongoose.Types.ObjectId(adminId) },
+                            { sender: 'admin', adminId: new mongoose.Types.ObjectId(adminId) }
+                        ],
+                        isDeleted: false
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$userId'
+                    }
+                },
+                {
+                    $count: 'total'
+                }
+            ]);
+    
+            const total = totalCount.length > 0 ? totalCount[0].total : 0;
+    
+            res.status(200).json({
+                success: true,
+                data: recentChats,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / parseInt(limit))
+                }
+            });
+    
+        } catch (error) {
+            console.error('Error fetching recent chats:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to fetch recent chats',
+                error: error.message
+            });
+        }
+    },
+
+    getChats: async (req, res) => {
+        try {
+            const adminId = req.adminId;
+            const userId  = req.params.id;
+            const { page = 1, limit = 50, sessionId } = req.query;
+    
+            // Build the match query
+            let matchQuery = {
+                userId: new mongoose.Types.ObjectId(userId),
+                isDeleted: false,
+                $or: [
+                    { adminId: new mongoose.Types.ObjectId(adminId) },
+                    { sender: 'admin', adminId: new mongoose.Types.ObjectId(adminId) },
+                    { sender: 'user' } // Include user messages in the conversation
+                ]
+            };
+    
+            // If sessionId is provided, filter by session
+            if (sessionId) {
+                matchQuery.sessionId = new mongoose.Types.ObjectId(sessionId);
+            }
+    
+            // Get messages with pagination (newest first, but reverse for chat display)
+            const messages = await Message.find(matchQuery)
+                .populate('userId', 'name email phone profilePicture')
+                .populate('adminId', 'name email')
+                .populate('sessionId', 'sessionType status startTime endTime')
+                .sort({ createdAt: -1 }) // Newest first for pagination
+                .skip((page - 1) * parseInt(limit))
+                .limit(parseInt(limit))
+                .lean();
+    
+            // Reverse the array to show oldest to newest (typical chat order)
+            const sortedMessages = messages.reverse();
+    
+            // Get total count
+            const totalCount = await Message.countDocuments(matchQuery);
+    
+            // Mark messages as read (optional - update read status)
+            await Message.updateMany(
+                {
+                    userId: new mongoose.Types.ObjectId(userId),
+                    sender: 'user',
+                    status: 'delivered',
+                    readAt: null
+                },
+                {
+                    status: 'read',
+                    readAt: new Date()
+                }
+            );
+    
+            res.status(200).json({
+                success: true,
+                data: sortedMessages,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total: totalCount,
+                    pages: Math.ceil(totalCount / parseInt(limit)),
+                    hasMore: (page * limit) < totalCount
+                }
+            });
+    
+        } catch (error) {
+            console.error('Error fetching messages:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to fetch messages',
+                error: error.message
+            });
+        }
+    },
+
     // Get messages for a session
     getSessionMessages: async (req, res) => {
         try {

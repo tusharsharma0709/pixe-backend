@@ -5,7 +5,7 @@ const axios = require('axios');
 // Configuration
 const MAKE_CONFIG = {
     apiToken: process.env.MAKE_API_TOKEN,
-    baseUrl: process.env.MAKE_API_URL || 'https://eu1.make.com/api/v2',
+    baseUrl: process.env.MAKE_API_URL || 'https://us2.make.com/api/v2',
     timeout: 30000,
     retries: 3
 };
