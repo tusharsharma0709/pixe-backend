@@ -265,7 +265,7 @@ const notificationSchema = new mongoose.Schema({
                 'FileUploads',
                 'Integrations',
                 'System',
-                'Workflows'
+                'Workflow'
             ]
         },
         id: {

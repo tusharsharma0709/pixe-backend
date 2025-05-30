@@ -6,7 +6,7 @@ const { adminAuth, agentAuth, adminOrAgentAuth } = require('../middlewares/auth'
 
 // Agent routes
 // Send message from agent to user
-router.post('/send', agentAuth, MessageController.sendMessage);
+router.post('/send', adminOrAgentAuth, MessageController.sendMessage);
 
 // Common routes for both admin and agent
 // Get messages for a session
