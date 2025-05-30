@@ -74,69 +74,62 @@ const sendWhatsAppMessage = async (phoneNumber, message, messageType = 'text', m
 
 const MessageController = {
     // Send message from agent to user
-    sendMessage: async (req, res) => {
-        try {
-            const {
+sendMessage: async (req, res) => {
+    try {
+        const {
+            userId,
+            sessionId,
+            content,
+            messageType = 'text',
+            mediaUrl,
+            metadata
+        } = req.body;
+
+        const agentId = req.agentId;
+        const adminId = req.adminId;
+
+        // Validate required fields
+        if (!userId || !content) {
+            return res.status(400).json({
+                success: false,
+                message: "User ID and content are required"
+            });
+        }
+
+        // Determine sender type based on authentication
+        let senderType, senderId;
+
+        if (agentId) {
+            senderType = 'agent';
+            senderId = agentId;
+
+            // Check if agent has access to this user
+            const leadAssignment = await LeadAssignment.findOne({
                 userId,
-                sessionId,
-                content,
-                messageType = 'text',
-                mediaUrl,
-                metadata
-            } = req.body;
-    
-            const agentId = req.agentId;
-            const adminId = req.adminId;
-    
-            // Validate required fields
-            if (!userId || !content) {
-                return res.status(400).json({
-                    success: false,
-                    message: "User ID and content are required"
-                });
-            }
-    
-            // Determine sender type based on authentication
-            let senderType, senderId;
-    
-            if (agentId) {
-                senderType = 'agent';
-                senderId = agentId;
-    
-                // Check if agent has access to this user
-                const leadAssignment = await LeadAssignment.findOne({
-                    userId,
-                    agentId,
-                    status: 'active'
-                });
-    
-                if (!leadAssignment) {
-                    return res.status(403).json({
-                        success: false,
-                        message: "You don't have permission to message this user"
-                    });
-                }
-    
-            } else if (adminId) {
-                senderType = 'admin';
-                senderId = adminId;
-                // Admin can message any user - no additional permission check needed
-    
-            } else {
-                return res.status(401).json({
-                    success: false,
-                    message: "Authentication required - must be agent or admin"
-                });
-            }
-    
-            // Get user details
-            const user = await User.findById(userId);
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: "User not found"
-                });
-            }
+                agentId,
+                status: 'active'
+            });
+
+        } else if (adminId) {
+            senderType = 'admin';
+            senderId = adminId;
+            // Admin can message any user - no additional permission check needed
+
+        } else {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required - must be agent or admin"
+            });
+        }
+
+        // Get user details
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found"
+            });
+        }
 
             // Get or create session
             let session = null;
