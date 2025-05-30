@@ -65,6 +65,7 @@ const notificationSchema = new mongoose.Schema({
             'kyc_workflow_created',
             'workflow_execution_failed',
             'workflow_completed',
+            'configuration_warning',      // Used for SurePass config warnings
             
             // Campaign notifications
             'campaign_request',
@@ -263,7 +264,8 @@ const notificationSchema = new mongoose.Schema({
                 'Analytics',
                 'FileUploads',
                 'Integrations',
-                'System'
+                'System',
+                'Workflows'
             ]
         },
         id: {

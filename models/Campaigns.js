@@ -135,8 +135,7 @@ const campaignSchema = new mongoose.Schema({
     facebookCampaignId: {
         type: String,
         required: true,
-        unique: true,
-        index: true
+        unique: true
     },
     facebookCampaignUrl: {
         type: String,

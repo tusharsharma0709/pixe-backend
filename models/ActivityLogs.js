@@ -84,7 +84,11 @@ const activityLogSchema = new mongoose.Schema({
             'workflow_deactivated',
             'workflow_executed',
             'workflow_failed',
-            'kyc_workflow_created',
+            'kyc_workflow_created',      // Used in controller for KYC workflows
+            'workflow_tested',           // Used in controller test functionality
+            'workflow_previewed',        // Used in controller preview functionality
+            'workflow_cloned',           // Used in controller clone functionality
+            'workflow_template_created',
             
             // Session actions
             'session_started',
