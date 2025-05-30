@@ -74,63 +74,70 @@ const sendWhatsAppMessage = async (phoneNumber, message, messageType = 'text', m
 
 const MessageController = {
     // Send message from agent to user
-sendMessage: async (req, res) => {
-    try {
-        const {
-            userId,
-            sessionId,
-            content,
-            messageType = 'text',
-            mediaUrl,
-            metadata
-        } = req.body;
-
-        const agentId = req.agentId;
-        const adminId = req.adminId;
-
-        // Validate required fields
-        if (!userId || !content) {
-            return res.status(400).json({
-                success: false,
-                message: "User ID and content are required"
-            });
-        }
-
-        // Determine sender type based on authentication
-        let senderType, senderId;
-
-        if (agentId) {
-            senderType = 'agent';
-            senderId = agentId;
-
-            // Check if agent has access to this user
-            const leadAssignment = await LeadAssignment.findOne({
+    sendMessage: async (req, res) => {
+        try {
+            const {
                 userId,
-                agentId,
-                status: 'active'
-            });
-
-        } else if (adminId) {
-            senderType = 'admin';
-            senderId = adminId;
-            // Admin can message any user - no additional permission check needed
-
-        } else {
-            return res.status(401).json({
-                success: false,
-                message: "Authentication required - must be agent or admin"
-            });
-        }
-
-        // Get user details
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: "User not found"
-            });
-        }
-
+                sessionId,
+                content,
+                messageType = 'text',
+                mediaUrl,
+                metadata
+            } = req.body;
+    
+            const agentId = req.agentId;
+            const adminId = req.adminId;
+    
+            // Validate required fields
+            if (!userId || !content) {
+                return res.status(400).json({
+                    success: false,
+                    message: "User ID and content are required"
+                });
+            }
+    
+            // Determine sender type based on authentication
+            let senderType, senderId;
+    
+            if (agentId) {
+                senderType = 'agent';
+                senderId = agentId;
+    
+                // Check if agent has access to this user
+                const leadAssignment = await LeadAssignment.findOne({
+                    userId,
+                    agentId,
+                    status: 'active'
+                });
+    
+                if (!leadAssignment) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "You don't have permission to message this user"
+                    });
+                }
+    
+            } else if (adminId) {
+                senderType = 'admin';
+                senderId = adminId;
+                // Admin can message any user - no additional permission check needed
+    
+            } else {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required - must be agent or admin"
+                });
+            }
+    
+            // Get user details
+            const user = await User.findById(userId);
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    message: "User not found"
+                });
+            }
+    
             // Get or create session
             let session = null;
             if (sessionId) {
@@ -142,14 +149,14 @@ sendMessage: async (req, res) => {
                     status: 'active'
                 }).sort({ createdAt: -1 });
             }
-
+    
             if (!session) {
                 return res.status(404).json({
                     success: false,
                     message: "No active session found"
                 });
             }
-
+    
             // Send WhatsApp message
             const whatsappResult = await sendWhatsAppMessage(
                 user.phone,
@@ -157,7 +164,7 @@ sendMessage: async (req, res) => {
                 messageType,
                 mediaUrl
             );
-
+    
             if (!whatsappResult.success) {
                 return res.status(500).json({
                     success: false,
@@ -165,15 +172,12 @@ sendMessage: async (req, res) => {
                     error: whatsappResult.error
                 });
             }
-
+    
             // Create message record
-            const message = new Message({
+            const messageData = {
                 sessionId: session._id,
                 userId,
-                agentId,
-                adminId: session.adminId,
-                campaignId: session.campaignId,
-                sender: 'agent',
+                sender: senderType,
                 messageType,
                 content,
                 metadata,
@@ -181,35 +185,83 @@ sendMessage: async (req, res) => {
                 mediaType: messageType,
                 status: 'sent',
                 whatsappMessageId: whatsappResult.data.messages?.[0]?.id
-            });
-
+            };
+    
+            // Add sender-specific fields
+            if (senderType === 'agent') {
+                messageData.agentId = senderId;
+                messageData.adminId = session.adminId;
+                messageData.campaignId = session.campaignId;
+            } else if (senderType === 'admin') {
+                messageData.adminId = senderId;
+                messageData.campaignId = session.campaignId;
+            }
+    
+            const message = new Message(messageData);
             await message.save();
-
+    
             // Update session activity
             session.lastInteractionAt = new Date();
             session.interactionCount += 1;
             await session.save();
-
-            // Get agent details for logging
-            const agent = await Agent.findById(agentId);
-
-            // Log activity
-            await logActivity({
-                actorId: agentId,
-                actorModel: 'Agents',
-                actorName: agent ? `${agent.first_name} ${agent.last_name}` : null,
-                action: 'message_sent',
-                entityType: 'Message',
-                entityId: message._id,
-                description: `Agent sent message to user ${user.name || user.phone}`,
-                adminId: session.adminId
-            });
-
+    
+            // Log activity with proper validation
+            try {
+                let senderName = null;
+                let actorModel = null;
+                let validSenderId = null;
+    
+                if (senderType === 'agent') {
+                    const agent = await Agent.findById(senderId);
+                    if (agent) {
+                        senderName = `${agent.first_name} ${agent.last_name}`;
+                        actorModel = 'Agents';
+                        validSenderId = senderId;
+                    }
+                } else if (senderType === 'admin') {
+                    const admin = await Admin.findById(senderId);
+                    if (admin) {
+                        senderName = admin.name || admin.email || 'Admin';
+                        actorModel = 'Admins';
+                        validSenderId = senderId;
+                    }
+                }
+    
+                // Only log activity if we have valid actor data
+                if (validSenderId && senderName && actorModel) {
+                    await logActivity({
+                        actorId: validSenderId,
+                        actorModel: actorModel,
+                        actorName: senderName,
+                        action: 'message_sent',
+                        entityType: 'Message',
+                        entityId: message._id,
+                        description: `${senderType.charAt(0).toUpperCase() + senderType.slice(1)} sent message to user ${user.fullName || user.phone}`,
+                        adminId: session.adminId
+                    });
+                } else {
+                    console.warn('Activity logging skipped - missing required actor data:', {
+                        senderId: validSenderId,
+                        senderName,
+                        actorModel,
+                        senderType
+                    });
+                }
+            } catch (activityError) {
+                console.error("Error logging activity:", activityError.message);
+                // Don't throw error - just log it and continue
+            }
+    
             return res.status(201).json({
                 success: true,
                 message: "Message sent successfully",
-                data: message
+                data: {
+                    ...message.toObject(),
+                    senderType,
+                    senderName: senderName || `${senderType} user`
+                }
             });
+    
         } catch (error) {
             console.error("Error in sendMessage:", error);
             return res.status(500).json({
