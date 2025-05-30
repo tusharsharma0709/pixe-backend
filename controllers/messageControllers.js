@@ -84,9 +84,10 @@ const MessageController = {
                 mediaUrl,
                 metadata
             } = req.body;
-
+    
             const agentId = req.agentId;
-
+            const adminId = req.adminId;
+    
             // Validate required fields
             if (!userId || !content) {
                 return res.status(400).json({
@@ -94,21 +95,40 @@ const MessageController = {
                     message: "User ID and content are required"
                 });
             }
-
-            // Check if agent has access to this user
-            const leadAssignment = await LeadAssignment.findOne({
-                userId,
-                agentId,
-                status: 'active'
-            });
-
-            if (!leadAssignment) {
-                return res.status(403).json({
+    
+            // Determine sender type based on authentication
+            let senderType, senderId;
+    
+            if (agentId) {
+                senderType = 'agent';
+                senderId = agentId;
+    
+                // Check if agent has access to this user
+                const leadAssignment = await LeadAssignment.findOne({
+                    userId,
+                    agentId,
+                    status: 'active'
+                });
+    
+                if (!leadAssignment) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "You don't have permission to message this user"
+                    });
+                }
+    
+            } else if (adminId) {
+                senderType = 'admin';
+                senderId = adminId;
+                // Admin can message any user - no additional permission check needed
+    
+            } else {
+                return res.status(401).json({
                     success: false,
-                    message: "You don't have permission to message this user"
+                    message: "Authentication required - must be agent or admin"
                 });
             }
-
+    
             // Get user details
             const user = await User.findById(userId);
             if (!user) {
