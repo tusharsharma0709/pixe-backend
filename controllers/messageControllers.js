@@ -41,7 +41,7 @@ const sendWhatsAppMessage = async (phoneNumber, message, messageType = 'text', m
     try {
         // This would integrate with WhatsApp Business API
         // For now, it's a placeholder function
-        const apiUrl = process.env.WHATSAPP_API_URL;
+        const apiUrl =`https://graph.facebook.com/v22.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
         const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
         
         const payload = {
