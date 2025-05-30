@@ -1,4 +1,4 @@
-// models/ActivityLogs.js - Updated ActivityLog model with call-related actions
+// models/ActivityLogs.js - Updated ActivityLog model with comprehensive enum values
 
 const mongoose = require('mongoose');
 
@@ -13,7 +13,7 @@ const activityLogSchema = new mongoose.Schema({
     actorModel: {
         type: String,
         required: true,
-        enum: ['Admins', 'Users', 'System'],
+        enum: ['Admins', 'SuperAdmins', 'Agents', 'Users', 'System'],
         index: true
     },
     
@@ -27,12 +27,17 @@ const activityLogSchema = new mongoose.Schema({
         type: String,
         required: true,
         enum: [
-            // Authentication
+            // Authentication actions
             'login', 
             'logout', 
             'register', 
             'password_change', 
             'password_reset',
+            'two_factor_enabled',
+            'two_factor_disabled',
+            'login_failed',
+            'account_locked',
+            'password_reset_requested',
 
             // User management actions
             'user_created',
@@ -42,6 +47,8 @@ const activityLogSchema = new mongoose.Schema({
             'user_logout',
             'user_password_changed',
             'user_profile_updated',
+            'user_activated',
+            'user_deactivated',
             
             // Admin management actions
             'admin_created',
@@ -50,6 +57,24 @@ const activityLogSchema = new mongoose.Schema({
             'admin_login',
             'admin_logout',
             'admin_role_changed',
+            'admin_activated',
+            'admin_deactivated',
+            
+            // SuperAdmin management actions
+            'superadmin_created',
+            'superadmin_updated',
+            'superadmin_deleted',
+            'superadmin_login',
+            'superadmin_logout',
+            
+            // Agent management actions
+            'agent_created',
+            'agent_updated',
+            'agent_deleted',
+            'agent_login',
+            'agent_logout',
+            'agent_assigned',
+            'agent_unassigned',
             
             // Workflow actions
             'workflow_created',
@@ -57,6 +82,8 @@ const activityLogSchema = new mongoose.Schema({
             'workflow_deleted',
             'workflow_activated',
             'workflow_deactivated',
+            'workflow_executed',
+            'workflow_failed',
             'kyc_workflow_created',
             
             // Session actions
@@ -64,71 +91,118 @@ const activityLogSchema = new mongoose.Schema({
             'session_completed',
             'session_abandoned',
             'session_resumed',
+            'session_paused',
             
             // Verification actions
             'verification_initiated',
             'verification_completed',
             'verification_failed',
+            'verification_retried',
             'kyc_verification_completed',
             
-            // Call management actions - NEW
+            // Call management actions
             'call_initiated',
             'call_completed',
             'call_failed',
             'call_hung_up',
+            'call_missed',
             'call_recording_accessed',
             'call_notes_updated',
+            'call_transferred',
+            'call_hold',
+            'call_resumed',
             'dtmf_sent',
+            'dtmf_received',
             
             // Campaign actions
             'campaign_requested',
+            'campaign_created',
             'campaign_updated',
             'campaign_deleted',
             'campaign_started',
             'campaign_paused',
+            'campaign_resumed',
             'campaign_completed',
+            'campaign_published',
+            'campaign_approved',
+            'campaign_rejected',
+            'campaign_reviewed',
+            
+            // Product actions
+            'product_created',
+            'product_updated',
+            'product_deleted',
+            'product_approved',
+            'product_rejected',
+            'product_published',
+            'product_reviewed',
+            'product_catalog_created',
+            'product_catalog_updated',
+            'product_catalog_deleted',
             
             // Message actions
             'message_sent',
             'message_received',
             'message_failed',
+            'message_delivered',
             'bulk_message_sent',
+            
+            // Notification actions
+            'notification_sent',
+            'notification_read',
+            'notification_dismissed',
+            'notification_created',
             
             // Analytics actions
             'report_generated',
             'report_downloaded',
+            'report_viewed',
             'analytics_viewed',
+            'dashboard_accessed',
             
             // System actions
             'system_backup',
             'system_restore',
+            'system_maintenance',
             'configuration_updated',
             'integration_configured',
+            'settings_updated',
             
             // API actions
             'api_key_generated',
             'api_key_revoked',
+            'api_request_made',
             'webhook_configured',
+            'webhook_triggered',
             
             // Security actions
-            'login_failed',
-            'account_locked',
-            'password_reset_requested',
-            'two_factor_enabled',
-            'two_factor_disabled',
+            'suspicious_activity',
+            'security_alert',
+            'permissions_changed',
+            'role_assigned',
+            'role_removed',
             
             // Data actions
             'data_exported',
             'data_imported',
             'data_deleted',
+            'data_backed_up',
             'bulk_operation_performed',
+            
+            // File actions
+            'file_uploaded',
+            'file_downloaded',
+            'file_deleted',
+            'file_shared',
             
             // Generic actions
             'created',
             'updated',
             'deleted',
             'viewed',
-            'accessed'
+            'accessed',
+            'archived',
+            'restored'
         ],
         index: true
     },
@@ -140,19 +214,28 @@ const activityLogSchema = new mongoose.Schema({
         enum: [
             'User',
             'Admin', 
+            'SuperAdmin',
+            'Agent',
             'Workflow',
             'Session',
             'Message',
             'Campaign',
+            'CampaignRequest',
+            'Product',
+            'ProductRequest',
+            'ProductCatalog',
             'Verification',
-            'Call',        // NEW
-            'Recording',   // NEW
-            'PhoneNumber', // NEW
+            'Call',
+            'Recording',
+            'PhoneNumber',
             'Notification',
             'ActivityLog',
             'Report',
+            'Analytics',
             'ApiKey',
             'Configuration',
+            'FileUpload',
+            'Integration',
             'System'
         ],
         index: true
@@ -174,13 +257,26 @@ const activityLogSchema = new mongoose.Schema({
         maxlength: 1000
     },
     
+    // Additional details
+    details: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+    },
+    
+    // Changed fields (for update operations)
+    changedFields: [{
+        field: String,
+        oldValue: mongoose.Schema.Types.Mixed,
+        newValue: mongoose.Schema.Types.Mixed
+    }],
+    
     // Additional metadata
     metadata: {
         type: mongoose.Schema.Types.Mixed,
         default: {}
     },
     
-    // Call-specific metadata - NEW
+    // Call-specific metadata
     callMetadata: {
         callSid: String,
         fromNumber: String,
@@ -198,6 +294,20 @@ const activityLogSchema = new mongoose.Schema({
         index: true
     },
     
+    // SuperAdmin context
+    superAdminId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SuperAdmins',
+        index: true
+    },
+    
+    // Agent context
+    agentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Agents',
+        index: true
+    },
+    
     // User context (if applicable)
     userId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -205,8 +315,8 @@ const activityLogSchema = new mongoose.Schema({
         index: true
     },
     
-    // IP and device information
-    ipAddress: {
+    // Network and device information
+    ip: {
         type: String
     },
     
@@ -215,7 +325,7 @@ const activityLogSchema = new mongoose.Schema({
     },
     
     deviceInfo: {
-        type: String
+        type: mongoose.Schema.Types.Mixed
     },
     
     // Location information
@@ -243,7 +353,7 @@ const activityLogSchema = new mongoose.Schema({
     // Status and categorization
     status: {
         type: String,
-        enum: ['success', 'failed', 'pending', 'warning'],
+        enum: ['success', 'failure', 'pending', 'warning', 'error'],
         default: 'success',
         index: true
     },
@@ -253,16 +363,20 @@ const activityLogSchema = new mongoose.Schema({
         enum: [
             'authentication',
             'user_management', 
+            'admin_management',
             'workflow_management',
-            'communication',    // NEW - for call-related activities
+            'communication',
             'verification',
             'campaign_management',
+            'product_management',
             'system_administration',
             'data_management',
             'security',
             'api_usage',
             'analytics',
             'configuration',
+            'file_management',
+            'notification',
             'other'
         ],
         default: 'other',
@@ -328,10 +442,12 @@ activityLogSchema.index({ actorId: 1, createdAt: -1 });
 activityLogSchema.index({ action: 1, createdAt: -1 });
 activityLogSchema.index({ entityType: 1, entityId: 1 });
 activityLogSchema.index({ adminId: 1, createdAt: -1 });
+activityLogSchema.index({ superAdminId: 1, createdAt: -1 });
+activityLogSchema.index({ agentId: 1, createdAt: -1 });
 activityLogSchema.index({ userId: 1, createdAt: -1 });
 activityLogSchema.index({ status: 1, priority: 1 });
 activityLogSchema.index({ category: 1, createdAt: -1 });
-activityLogSchema.index({ 'callMetadata.callSid': 1 }); // NEW - for call lookups
+activityLogSchema.index({ 'callMetadata.callSid': 1 });
 
 // Virtual for human-readable timestamp
 activityLogSchema.virtual('formattedDate').get(function() {
@@ -375,6 +491,8 @@ activityLogSchema.statics.getActivities = async function(filters = {}, options =
             .limit(limit)
             .populate('actorId', 'first_name last_name email')
             .populate('adminId', 'first_name last_name')
+            .populate('superAdminId', 'first_name last_name')
+            .populate('agentId', 'first_name last_name')
             .populate('userId', 'first_name last_name phone_number'),
         this.countDocuments(query)
     ]);

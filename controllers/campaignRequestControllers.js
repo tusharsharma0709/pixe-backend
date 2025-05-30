@@ -347,7 +347,7 @@ const createCampaignRequest = async (req, res) => {
             actorModel: 'Admins',
             actorName: `${admin.first_name} ${admin.last_name}`,
             action: 'campaign_requested',
-            entityType: 'CampaignRequest',
+            entityType: 'Campaign',
             entityId: campaignRequest._id,
             description: `Campaign request "${name}" was submitted by admin`,
             status: 'success'
@@ -652,7 +652,7 @@ const reviewCampaignRequest = async (req, res) => {
             actorId: superAdminId,
             actorModel: 'SuperAdmins',
             action: action,
-            entityType: 'CampaignRequest',
+            entityType: 'Campaign',
             entityId: campaignRequest._id,
             description: `Campaign request "${campaignRequest.name}" was ${status === 'under_review' ? 'placed under review' : status} by super admin`,
             status: 'success',

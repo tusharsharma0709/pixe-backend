@@ -1,4 +1,4 @@
-// models/Notifications.js - Updated Notification model with call-related types
+// models/Notifications.js - Updated Notification model with comprehensive enum values
 
 const mongoose = require('mongoose');
 
@@ -25,28 +25,73 @@ const notificationSchema = new mongoose.Schema({
             'system_alert',
             'system_maintenance',
             'system_update',
+            'system_error',
             'configuration_warning',
+            'service_status',
             
             // User notifications
             'user_registered',
+            'user_updated',
+            'user_deleted',
             'user_verification_completed',
             'user_kyc_completed',
             'user_session_completed',
+            'user_login',
+            'user_logout',
+            
+            // Admin notifications
+            'admin_created',
+            'admin_updated',
+            'admin_deleted',
+            'admin_login',
+            'admin_logout',
+            'admin_action_required',
+            'admin_approval_pending',
+            'admin_report_ready',
+            
+            // Agent notifications
+            'agent_created',
+            'agent_updated',
+            'agent_deleted',
+            'agent_assigned',
+            'agent_unassigned',
             
             // Workflow notifications
             'workflow_created',
             'workflow_updated',
             'workflow_deleted',
+            'workflow_activated',
+            'workflow_deactivated',
             'kyc_workflow_created',
             'workflow_execution_failed',
+            'workflow_completed',
             
             // Campaign notifications
+            'campaign_request',
+            'campaign_created',
+            'campaign_updated',
+            'campaign_deleted',
             'campaign_started',
             'campaign_completed',
             'campaign_paused',
+            'campaign_resumed',
+            'campaign_published',
+            'campaign_approved',
+            'campaign_rejected',
             'campaign_milestone_reached',
             
-            // Call notifications - NEW
+            // Product notifications
+            'product_request',
+            'product_created',
+            'product_updated',
+            'product_deleted',
+            'product_approved',
+            'product_rejected',
+            'product_published',
+            'product_approval',
+            'product_rejection',
+            
+            // Call notifications
             'call_initiated',
             'call_completed',
             'call_failed',
@@ -54,6 +99,7 @@ const notificationSchema = new mongoose.Schema({
             'call_recording_ready',
             'call_callback_required',
             'call_follow_up_due',
+            'call_transferred',
             'dtmf_received',
             'call_limit_reached',
             'call_cost_alert',
@@ -62,42 +108,61 @@ const notificationSchema = new mongoose.Schema({
             'message_sent',
             'message_failed',
             'message_delivered',
+            'bulk_message_sent',
             'bulk_message_completed',
+            'message_received',
             
             // Verification notifications
             'verification_successful',
             'verification_failed',
             'verification_pending',
+            'verification_retried',
             'kyc_verification_completed',
+            'kyc_verification_failed',
             
             // Analytics notifications
             'report_ready',
+            'report_generated',
             'analytics_milestone',
             'usage_threshold_reached',
+            'analytics_summary',
             
             // Security notifications
             'login_failed_multiple',
             'account_locked',
+            'account_unlocked',
             'suspicious_activity',
             'password_changed',
+            'password_reset',
+            'two_factor_enabled',
+            'two_factor_disabled',
+            'security_alert',
             
             // Integration notifications
             'api_limit_reached',
+            'api_key_generated',
+            'api_key_revoked',
             'webhook_failed',
+            'webhook_configured',
             'service_integration_failed',
             'surepass_quota_warning',
-            'exotel_balance_low',  // NEW
+            'exotel_balance_low',
+            'integration_error',
             
-            // Admin notifications
-            'admin_action_required',
-            'admin_approval_pending',
-            'admin_report_ready',
+            // File notifications
+            'file_uploaded',
+            'file_download_ready',
+            'file_processing_complete',
+            'file_error',
             
             // Generic notifications
             'info',
             'success',
             'warning',
-            'error'
+            'error',
+            'reminder',
+            'update',
+            'alert'
         ],
         index: true
     },
@@ -105,7 +170,7 @@ const notificationSchema = new mongoose.Schema({
     // Priority level
     priority: {
         type: String,
-        enum: ['low', 'medium', 'high', 'urgent'],
+        enum: ['low', 'medium', 'high', 'urgent', 'critical'],
         default: 'medium',
         index: true
     },
@@ -113,15 +178,27 @@ const notificationSchema = new mongoose.Schema({
     // Notification status
     status: {
         type: String,
-        enum: ['unread', 'read', 'archived', 'dismissed'],
+        enum: ['unread', 'read', 'archived', 'dismissed', 'expired'],
         default: 'unread',
         index: true
     },
     
-    // Recipient information
+    // Recipient information - Updated to support new roles
+    forSuperAdmin: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
+    
     forAdmin: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Admins',
+        index: true
+    },
+    
+    forAgent: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Agents',
         index: true
     },
     
@@ -131,7 +208,7 @@ const notificationSchema = new mongoose.Schema({
         index: true
     },
     
-    // Global notification (for all admins)
+    // Global notification (for all users of specific roles)
     isGlobal: {
         type: Boolean,
         default: false,
@@ -141,7 +218,24 @@ const notificationSchema = new mongoose.Schema({
     // Role-based notification
     forRoles: [{
         type: String,
-        enum: ['super_admin', 'admin', 'moderator', 'support', 'viewer']
+        enum: ['super_admin', 'admin', 'agent', 'moderator', 'support', 'viewer', 'user']
+    }],
+    
+    // Read tracking
+    readBy: [{
+        userId: {
+            type: mongoose.Schema.Types.ObjectId,
+            required: true
+        },
+        userType: {
+            type: String,
+            enum: ['SuperAdmin', 'Admin', 'Agent', 'User'],
+            required: true
+        },
+        readAt: {
+            type: Date,
+            default: Date.now
+        }
     }],
     
     // Related entity
@@ -151,16 +245,24 @@ const notificationSchema = new mongoose.Schema({
             enum: [
                 'Users', 
                 'Admins', 
+                'SuperAdmins',
+                'Agents',
                 'Workflows', 
                 'Sessions', 
                 'Messages', 
-                'Campaigns', 
+                'Campaigns',
+                'CampaignRequests',
+                'Products',
+                'ProductRequests',
+                'ProductCatalogs',
                 'Verifications',
-                'Calls',        // NEW
-                'Recordings',   // NEW
-                'PhoneNumbers', // NEW
+                'Calls',
+                'Recordings',
+                'PhoneNumbers',
                 'Reports',
                 'Analytics',
+                'FileUploads',
+                'Integrations',
                 'System'
             ]
         },
@@ -169,7 +271,7 @@ const notificationSchema = new mongoose.Schema({
         }
     },
     
-    // Call-specific metadata - NEW
+    // Call-specific metadata
     callMetadata: {
         callSid: String,
         fromNumber: String,
@@ -245,9 +347,14 @@ const notificationSchema = new mongoose.Schema({
             'webhook',
             'manual',
             'scheduler',
-            'exotel',    // NEW
+            'exotel',
             'surepass',
-            'whatsapp'
+            'whatsapp',
+            'facebook',
+            'instagram',
+            'email',
+            'sms',
+            'notification_service'
         ],
         default: 'system'
     },
@@ -258,14 +365,17 @@ const notificationSchema = new mongoose.Schema({
         enum: [
             'system',
             'user_activity',
+            'admin_activity',
             'workflow',
-            'communication',  // NEW - for call-related notifications
+            'communication',
             'verification',
             'campaign',
+            'product',
             'security',
             'analytics',
             'integration',
-            'admin',
+            'file_management',
+            'authentication',
             'other'
         ],
         default: 'other',
@@ -299,6 +409,10 @@ const notificationSchema = new mongoose.Schema({
         webhook: {
             type: Boolean,
             default: false
+        },
+        whatsapp: {
+            type: Boolean,
+            default: false
         }
     },
     
@@ -307,7 +421,7 @@ const notificationSchema = new mongoose.Schema({
         inApp: {
             status: {
                 type: String,
-                enum: ['pending', 'delivered', 'failed'],
+                enum: ['pending', 'delivered', 'failed', 'skipped'],
                 default: 'pending'
             },
             deliveredAt: Date,
@@ -316,7 +430,7 @@ const notificationSchema = new mongoose.Schema({
         email: {
             status: {
                 type: String,
-                enum: ['pending', 'sent', 'delivered', 'failed'],
+                enum: ['pending', 'sent', 'delivered', 'failed', 'bounced', 'skipped'],
                 default: 'pending'
             },
             sentAt: Date,
@@ -326,7 +440,27 @@ const notificationSchema = new mongoose.Schema({
         sms: {
             status: {
                 type: String,
-                enum: ['pending', 'sent', 'delivered', 'failed'],
+                enum: ['pending', 'sent', 'delivered', 'failed', 'skipped'],
+                default: 'pending'
+            },
+            sentAt: Date,
+            deliveredAt: Date,
+            error: String
+        },
+        push: {
+            status: {
+                type: String,
+                enum: ['pending', 'sent', 'delivered', 'failed', 'skipped'],
+                default: 'pending'
+            },
+            sentAt: Date,
+            deliveredAt: Date,
+            error: String
+        },
+        webhook: {
+            status: {
+                type: String,
+                enum: ['pending', 'sent', 'delivered', 'failed', 'skipped'],
                 default: 'pending'
             },
             sentAt: Date,
@@ -388,19 +522,23 @@ const notificationSchema = new mongoose.Schema({
 
 // Indexes for better query performance
 notificationSchema.index({ forAdmin: 1, status: 1, createdAt: -1 });
+notificationSchema.index({ forAgent: 1, status: 1, createdAt: -1 });
 notificationSchema.index({ forUser: 1, status: 1, createdAt: -1 });
+notificationSchema.index({ forSuperAdmin: 1, status: 1, createdAt: -1 });
 notificationSchema.index({ type: 1, createdAt: -1 });
 notificationSchema.index({ priority: 1, status: 1 });
 notificationSchema.index({ isGlobal: 1, createdAt: -1 });
 notificationSchema.index({ scheduledFor: 1, isScheduled: 1 });
 notificationSchema.index({ expiresAt: 1 });
-notificationSchema.index({ 'callMetadata.callSid': 1 }); // NEW - for call lookups
+notificationSchema.index({ 'callMetadata.callSid': 1 });
 notificationSchema.index({ category: 1, type: 1 });
 
 // Virtual for recipient display
 notificationSchema.virtual('recipientDisplay').get(function() {
-    if (this.isGlobal) return 'All Admins';
+    if (this.isGlobal) return 'All Users';
+    if (this.forSuperAdmin) return 'Super Admin';
     if (this.forAdmin) return 'Admin';
+    if (this.forAgent) return 'Agent';
     if (this.forUser) return 'User';
     if (this.forRoles && this.forRoles.length > 0) return this.forRoles.join(', ');
     return 'Unknown';
@@ -437,20 +575,29 @@ notificationSchema.statics.createNotification = async function(notificationData)
 };
 
 // Static method to mark as read
-notificationSchema.statics.markAsRead = async function(notificationIds, recipientId) {
+notificationSchema.statics.markAsRead = async function(notificationIds, recipientId, recipientType = 'Admin') {
     try {
         const result = await this.updateMany(
             { 
                 _id: { $in: notificationIds }, 
                 $or: [
                     { forAdmin: recipientId },
+                    { forAgent: recipientId },
                     { forUser: recipientId },
+                    { forSuperAdmin: true },
                     { isGlobal: true }
                 ]
             },
             { 
                 status: 'read',
-                readAt: new Date()
+                readAt: new Date(),
+                $addToSet: {
+                    readBy: {
+                        userId: recipientId,
+                        userType: recipientType,
+                        readAt: new Date()
+                    }
+                }
             }
         );
         
@@ -466,23 +613,40 @@ notificationSchema.statics.getUnreadCount = async function(recipientId, recipien
     try {
         const query = {
             status: 'unread',
-            isDeleted: false,
-            $or: []
+            isDeleted: false
         };
         
-        if (recipientType === 'admin') {
-            query.$or.push(
+        // Build recipient query based on type
+        const recipientQuery = { $or: [] };
+        
+        if (recipientType === 'superadmin') {
+            recipientQuery.$or.push({ forSuperAdmin: true });
+        } else if (recipientType === 'admin') {
+            recipientQuery.$or.push(
                 { forAdmin: recipientId },
-                { isGlobal: true }
+                { isGlobal: true, forRoles: 'admin' }
             );
-        } else {
-            query.$or.push({ forUser: recipientId });
+        } else if (recipientType === 'agent') {
+            recipientQuery.$or.push(
+                { forAgent: recipientId },
+                { isGlobal: true, forRoles: 'agent' }
+            );
+        } else if (recipientType === 'user') {
+            recipientQuery.$or.push(
+                { forUser: recipientId },
+                { isGlobal: true, forRoles: 'user' }
+            );
         }
+        
+        // Add recipient query to main query
+        query.$and = [recipientQuery];
         
         // Check for expiration
         const now = new Date();
-        query.$or.push({ expiresAt: { $exists: false } });
-        query.$or.push({ expiresAt: { $gt: now } });
+        query.$or = [
+            { expiresAt: { $exists: false } },
+            { expiresAt: { $gt: now } }
+        ];
         
         const count = await this.countDocuments(query);
         return count;
