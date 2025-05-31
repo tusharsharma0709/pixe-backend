@@ -293,7 +293,7 @@ const checkAadhaarPANLink = async (aadhaarNumber, panNumber, consent = 'Y') => {
         
         const requestBody = {
             aadhaar_number: cleanAadhaarNumber,
-            consent: cleanPanNumber
+            consent: 'Y'
         };
         
         console.log(`DEBUG: API endpoint: /pan/aadhaar-pan-link-check`);
