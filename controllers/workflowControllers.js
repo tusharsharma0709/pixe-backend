@@ -8,13 +8,13 @@ const unifiedGtmService = require('../services/gtmTrackingServices');
 
 // SurePass endpoint mapping and validation - UPDATED with new endpoints
 const SUREPASS_ENDPOINTS = {
-    '/api/v1/aadhaar-v2/generate-otp': {
+    '/api/verification/aadhaar-v2/generate-otp': {
         name: 'Aadhaar Verification',
         method: 'POST',
         requiredParams: ['aadhaar_number'],
         description: 'Verify Aadhaar number using SurePass API'
     },
-    '/api/v1/aadhaar-v2/submit-otp': {
+    '/api/verification/aadhaar-v2/submit-otp': {
         name: 'Aadhaar OTP Verification', 
         method: 'POST',
         requiredParams: ['client_id', 'otp'],

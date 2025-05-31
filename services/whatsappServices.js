@@ -1,10 +1,14 @@
-// services/whatsappServices.js
-// Using your existing implementation with the key function we need for the workflow
+// services/whatsappServices.js - Enhanced with unified sending function
 
 const axios = require('axios');
 const { makeApiRequest } = require('../utils/whatsappAuth');
 
-// We'll reuse your existing sendMessage function that has good error handling
+/**
+ * Send a text message via WhatsApp
+ * @param {String} phoneNumber - Recipient's phone number
+ * @param {String} message - Message content
+ * @returns {Promise} - API response
+ */
 const sendMessage = async (phoneNumber, message) => {
   try {
       console.log(`\n📤 SENDING WHATSAPP MESSAGE`);
@@ -58,30 +62,32 @@ const sendMessage = async (phoneNumber, message) => {
           throw new Error('Invalid response: No message ID returned');
       }
       
-      // Return response data
-      return response.data;
+      // Return standardized response
+      return {
+          success: true,
+          data: response.data,
+          messageId: response.data.messages[0].id
+      };
   } catch (error) {
       console.error(`❌ WHATSAPP SEND ERROR`);
       
       if (error.response) {
-          // The request was made and the server responded with a status code
-          // that falls out of the range of 2xx
           console.error(`  Status: ${error.response.status}`);
           console.error(`  Response: ${JSON.stringify(error.response.data || {})}`);
       } else if (error.request) {
-          // The request was made but no response was received
           console.error(`  No response received`);
       } else {
-          // Something happened in setting up the request that triggered an Error
           console.error(`  Error: ${error.message}`);
       }
       
-      // Throw enhanced error
-      throw error;
+      // Return standardized error response
+      return {
+          success: false,
+          error: error.message,
+          details: error.response?.data || null
+      };
   }
 };
-
-// Add some additional methods specifically for our KYC workflow
 
 /**
  * Send a media message via WhatsApp
@@ -140,14 +146,20 @@ const sendMediaMessage = async (phoneNumber, mediaUrl, caption = '', mediaType =
         
         console.log(`✅ Media message sent successfully`);
         
-        return response.data;
+        return {
+            success: true,
+            data: response.data,
+            messageId: response.data.messages[0].id
+        };
     } catch (error) {
         console.error(`❌ WHATSAPP MEDIA SEND ERROR:`, error.message);
-        throw error;
+        return {
+            success: false,
+            error: error.message,
+            details: error.response?.data || null
+        };
     }
 };
-
-// Updated sendButtonMessage function for services/whatsappServices.js
 
 /**
  * Send a WhatsApp message with interactive buttons
@@ -171,8 +183,8 @@ async function sendButtonMessage(phoneNumber, bodyText, buttons) {
       const processedButtons = buttons.slice(0, 3).map(button => ({
           type: "reply",
           reply: {
-              id: String(button.value || button.id || "option").substring(0, 256),  // Max 256 chars for ID
-              title: String(button.text || button.title || "Option").substring(0, 20) // Max 20 chars for title
+              id: String(button.value || button.id || "option").substring(0, 256),
+              title: String(button.text || button.title || "Option").substring(0, 20)
           }
       }));
       
@@ -228,31 +240,92 @@ async function sendButtonMessage(phoneNumber, bodyText, buttons) {
       console.log(`  Status: ${response.status}`);
       console.log(`  Response:`, response.data);
       
-      return response.data;
+      return {
+          success: true,
+          data: response.data,
+          messageId: response.data.messages[0].id
+      };
   } catch (error) {
       console.error(`❌ WHATSAPP INTERACTIVE MESSAGE ERROR`);
       
       if (error.response) {
-          // The request was made and the server responded with a status code
-          // that falls out of the range of 2xx
           console.error(`  Status: ${error.response.status}`);
           console.error(`  Response:`, error.response.data);
       } else if (error.request) {
-          // The request was made but no response was received
           console.error(`  No response received`);
       } else {
-          // Something happened in setting up the request that triggered an Error
           console.error(`  Error: ${error.message}`);
       }
       
-      // Throw enhanced error
-      throw error;
+      return {
+          success: false,
+          error: error.message,
+          details: error.response?.data || null
+      };
   }
 }
 
-// We'll export the main functions we need for our KYC workflow
+/**
+ * UNIFIED WHATSAPP SENDER - Main function to handle all message types
+ * @param {String} phoneNumber - Recipient's phone number
+ * @param {String} content - Message content
+ * @param {String} messageType - Type of message ('text', 'image', 'document', 'video', 'interactive')
+ * @param {String} mediaUrl - URL for media messages (optional)
+ * @param {Array} buttons - Buttons for interactive messages (optional)
+ * @returns {Promise<Object>} - Standardized response
+ */
+const sendWhatsAppMessage = async (phoneNumber, content, messageType = 'text', mediaUrl = null, buttons = null) => {
+    try {
+        console.log(`\n🔄 UNIFIED WHATSAPP SENDER`);
+        console.log(`  Phone: ${phoneNumber}`);
+        console.log(`  Type: ${messageType}`);
+        console.log(`  Content: "${content}"`);
+        
+        let result;
+        
+        switch (messageType.toLowerCase()) {
+            case 'text':
+                result = await sendMessage(phoneNumber, content);
+                break;
+                
+            case 'image':
+            case 'document':
+            case 'video':
+                if (!mediaUrl) {
+                    throw new Error(`Media URL is required for ${messageType} messages`);
+                }
+                result = await sendMediaMessage(phoneNumber, mediaUrl, content, messageType);
+                break;
+                
+            case 'interactive':
+            case 'buttons':
+                if (!buttons || !Array.isArray(buttons) || buttons.length === 0) {
+                    throw new Error('Buttons array is required for interactive messages');
+                }
+                result = await sendButtonMessage(phoneNumber, content, buttons);
+                break;
+                
+            default:
+                throw new Error(`Unsupported message type: ${messageType}`);
+        }
+        
+        console.log(`✅ UNIFIED SENDER RESULT: ${result.success ? 'SUCCESS' : 'FAILED'}`);
+        return result;
+        
+    } catch (error) {
+        console.error(`❌ UNIFIED SENDER ERROR: ${error.message}`);
+        return {
+            success: false,
+            error: error.message,
+            details: null
+        };
+    }
+};
+
+// Export all functions
 module.exports = {
     sendMessage,
     sendMediaMessage,
-    sendButtonMessage
+    sendButtonMessage,
+    sendWhatsAppMessage  // ← This is the main function for your API
 };
