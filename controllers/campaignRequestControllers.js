@@ -360,7 +360,7 @@ const createCampaignRequest = async (req, res) => {
             type: 'campaign_request',
             forSuperAdmin: true,
             relatedTo: {
-                model: 'CampaignRequest',
+                model: 'CampaignRequests',
                 id: campaignRequest._id
             },
             priority: 'medium'
@@ -631,7 +631,7 @@ const reviewCampaignRequest = async (req, res) => {
             type: 'campaign_request',
             adminId: campaignRequest.adminId,
             relatedTo: {
-                model: 'CampaignRequest',
+                model: 'CampaignRequests',
                 id: campaignRequest._id
             },
             priority: 'high'
