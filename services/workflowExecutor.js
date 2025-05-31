@@ -975,9 +975,19 @@ async function executeWorkflowNode(session, nodeId) {
                             console.log('  🔍 Verifying Aadhaar OTP');
                             
                             try {
-                                const clientId = session.data.aadhaarClientId || session.data.client_id;
+                                // 🔧 FIXED: Try multiple client_id field names
+                                const clientId = session.data.client_id || session.data.aadhaarClientId || session.data.clientId;
                                 const otp = session.data.otp || session.data.aadhaarOtp;
-                                
+
+                                console.log('  🔍 Debug session data:', {
+                                    client_id: session.data.client_id,
+                                    aadhaarClientId: session.data.aadhaarClientId,
+                                    clientId: session.data.clientId,
+                                    otp: session.data.otp,
+                                    aadhaarOtp: session.data.aadhaarOtp,
+                                    allData: Object.keys(session.data)
+                                });
+                                                                
                                 if (!clientId || !otp) {
                                     throw new Error('Client ID and OTP not found in session data');
                                 }
@@ -990,8 +1000,12 @@ async function executeWorkflowNode(session, nodeId) {
                                 
                                 session.data.aadhaarVerificationResult = result;
                                 session.data.isAadhaarVerified = result.success;
-                                if (result.success && result.data?.name) {
-                                    session.data.aadhaarName = result.data.name;
+                                if (result.success && result.data?.client_id) {
+                                    // 🔧 FIXED: Store client_id in multiple formats for compatibility
+                                    session.data.client_id = result.data.client_id;
+                                    session.data.aadhaarClientId = result.data.client_id;
+                                    session.data.clientId = result.data.client_id;
+                                    console.log('  ✅ Stored client_id in session:', result.data.client_id);
                                 }
                                 session.markModified('data');
                                 await session.save();
