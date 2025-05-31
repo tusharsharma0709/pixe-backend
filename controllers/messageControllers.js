@@ -761,34 +761,71 @@ const MessageController = {
     // In MessageController.js
     receiveMessage: async (req, res) => {
         try {
+            console.log('\n📥 WEBHOOK RECEIVED');
+            console.log('Request body:', JSON.stringify(req.body, null, 2));
+            
             // WhatsApp sends data in this specific format
             const { entry } = req.body;
             
-            if (!entry || !entry[0] || !entry[0].changes) {
+            // Validate webhook structure
+            if (!entry || !Array.isArray(entry) || !entry[0] || !entry[0].changes) {
+                console.log('⚠️ Invalid webhook structure - ignoring');
                 return res.sendStatus(200);
             }
             
             const changes = entry[0].changes[0];
             const value = changes.value;
             
+            // Log what type of webhook this is
+            if (value.messages) {
+                console.log('📨 Processing incoming message');
+            } else if (value.statuses) {
+                console.log('📋 Processing status update');
+            } else {
+                console.log('🔄 Unknown webhook type - ignoring');
+                return res.sendStatus(200);
+            }
+            
             // Handle different types of webhooks (messages, statuses, etc.)
             if (value.messages && value.messages[0]) {
                 // Handle incoming message
                 const message = value.messages[0];
                 const phoneNumber = message.from; // Format: 919302239283 (without +)
-                const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
                 const whatsappMessageId = message.id;
+                const timestamp = new Date(parseInt(message.timestamp) * 1000); // Convert Unix timestamp
+                
+                // Validate required fields
+                if (!phoneNumber || !whatsappMessageId) {
+                    console.error('❌ Missing required fields: phoneNumber or messageId');
+                    return res.sendStatus(200);
+                }
+                
+                // Format phone number consistently
+                const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
+                
+                console.log(`📱 Message from: ${formattedPhone}`);
+                console.log(`🆔 WhatsApp ID: ${whatsappMessageId}`);
+                
+                // Check for duplicate messages
+                const existingMessage = await Message.findOne({ whatsappMessageId });
+                if (existingMessage) {
+                    console.log('⚠️ Duplicate message detected - ignoring');
+                    return res.sendStatus(200);
+                }
                 
                 // Process message based on type
-                let content, messageType, mediaUrl, mediaName, mediaSize, metadata;
+                let content, messageType, mediaUrl, mediaName, mediaSize, metadata = {};
                 
                 // Determine message type
                 messageType = message.type || 'text';
+                console.log(`📝 Message type: ${messageType}`);
                 
                 switch (messageType) {
                     case 'text':
                         content = message.text?.body || '';
+                        console.log(`💬 Text content: "${content}"`);
                         break;
+                        
                     case 'interactive':
                         // Handle interactive message responses (buttons, lists)
                         if (message.interactive.type === 'button_reply') {
@@ -797,9 +834,10 @@ const MessageController = {
                             metadata = {
                                 buttonTitle: buttonReply.title,
                                 buttonId: buttonReply.id,
-                                interactiveType: 'button'
+                                interactiveType: 'button',
+                                originalContent: buttonReply.title // Also store the display text
                             };
-                            console.log(`Received button response: ID=${buttonReply.id}, Title=${buttonReply.title}`);
+                            console.log(`🔘 Button response: ID=${buttonReply.id}, Title=${buttonReply.title}`);
                         } 
                         else if (message.interactive.type === 'list_reply') {
                             const listReply = message.interactive.list_reply;
@@ -807,50 +845,120 @@ const MessageController = {
                             metadata = {
                                 listItemTitle: listReply.title,
                                 listItemId: listReply.id,
-                                interactiveType: 'list'
+                                listItemDescription: listReply.description,
+                                interactiveType: 'list',
+                                originalContent: listReply.title
                             };
-                            console.log(`Received list response: ID=${listReply.id}, Title=${listReply.title}`);
+                            console.log(`📋 List response: ID=${listReply.id}, Title=${listReply.title}`);
                         } 
                         else {
                             content = `Received interactive message of type: ${message.interactive.type}`;
-                            metadata = { interactiveType: message.interactive.type };
+                            metadata = { 
+                                interactiveType: message.interactive.type,
+                                rawInteractive: message.interactive
+                            };
+                            console.log(`🔄 Other interactive type: ${message.interactive.type}`);
                         }
                         break;
+                        
                     case 'image':
                         content = message.image?.caption || 'Image received';
-                        mediaUrl = message.image?.url;
-                        mediaType = 'image';
+                        mediaUrl = await this.downloadWhatsAppMedia(message.image?.id); // Download and store media
+                        metadata = {
+                            whatsappMediaId: message.image?.id,
+                            mimeType: message.image?.mime_type,
+                            sha256: message.image?.sha256
+                        };
+                        console.log(`🖼️ Image received: ${content}`);
                         break;
+                        
                     case 'document':
                         content = message.document?.caption || 'Document received';
-                        mediaUrl = message.document?.url;
+                        mediaUrl = await this.downloadWhatsAppMedia(message.document?.id);
                         mediaName = message.document?.filename;
                         mediaSize = message.document?.file_size;
+                        metadata = {
+                            whatsappMediaId: message.document?.id,
+                            mimeType: message.document?.mime_type,
+                            sha256: message.document?.sha256
+                        };
+                        console.log(`📄 Document received: ${mediaName}`);
                         break;
+                        
                     case 'audio':
                         content = 'Audio received';
-                        mediaUrl = message.audio?.url;
+                        mediaUrl = await this.downloadWhatsAppMedia(message.audio?.id);
                         mediaSize = message.audio?.file_size;
+                        metadata = {
+                            whatsappMediaId: message.audio?.id,
+                            mimeType: message.audio?.mime_type,
+                            sha256: message.audio?.sha256,
+                            voiceMessage: message.audio?.voice || false
+                        };
+                        console.log(`🎵 Audio received`);
                         break;
+                        
                     case 'video':
                         content = message.video?.caption || 'Video received';
-                        mediaUrl = message.video?.url;
+                        mediaUrl = await this.downloadWhatsAppMedia(message.video?.id);
                         mediaSize = message.video?.file_size;
+                        metadata = {
+                            whatsappMediaId: message.video?.id,
+                            mimeType: message.video?.mime_type,
+                            sha256: message.video?.sha256
+                        };
+                        console.log(`🎥 Video received: ${content}`);
                         break;
+                        
+                    case 'location':
+                        const location = message.location;
+                        content = `Location: ${location.name || 'Shared location'}`;
+                        metadata = {
+                            latitude: location.latitude,
+                            longitude: location.longitude,
+                            name: location.name,
+                            address: location.address
+                        };
+                        console.log(`📍 Location received: ${location.latitude}, ${location.longitude}`);
+                        break;
+                        
+                    case 'contacts':
+                        content = `Contact shared: ${message.contacts[0]?.name?.formatted_name || 'Unknown'}`;
+                        metadata = {
+                            contacts: message.contacts
+                        };
+                        console.log(`👤 Contact shared`);
+                        break;
+                        
                     default:
                         content = `Received a ${messageType} message`;
+                        metadata = { rawMessage: message };
+                        console.log(`❓ Unknown message type: ${messageType}`);
                 }
                 
                 // Find or create user
                 let user = await User.findOne({ phone: formattedPhone });
                 
                 if (!user) {
-                    // Create new user
+                    console.log(`👤 Creating new user for ${formattedPhone}`);
+                    // Create new user with more details if available
+                    const profile = value.contacts?.[0]?.profile;
                     user = await User.create({
                         phone: formattedPhone,
+                        fullName: profile?.name || null,
                         status: 'new',
-                        source: 'whatsapp'
+                        source: 'whatsapp',
+                        whatsappProfile: profile || null,
+                        firstMessageAt: timestamp
                     });
+                    console.log(`✅ User created: ${user._id}`);
+                } else {
+                    console.log(`👤 Found existing user: ${user._id}`);
+                    // Update last interaction
+                    await User.updateOne(
+                        { _id: user._id },
+                        { $set: { lastInteractionAt: timestamp } }
+                    );
                 }
                 
                 // Find active session or create one if needed
@@ -860,11 +968,32 @@ const MessageController = {
                 }).sort({ lastInteractionAt: -1 });
                 
                 if (!session) {
+                    console.log(`📋 Creating new session for user ${user._id}`);
+                    
                     // Get default workflow for new sessions
-                    const defaultWorkflow = await Workflow.findOne({ isActive: true }).sort({ createdAt: 1 });
+                    const defaultWorkflow = await Workflow.findOne({ 
+                        isActive: true,
+                        isDeleted: { $ne: true }
+                    }).sort({ createdAt: 1 });
                     
                     if (!defaultWorkflow) {
-                        console.error('No active workflow found. Cannot create session.');
+                        console.error('❌ No active workflow found. Cannot create session.');
+                        // Store message without session
+                        await Message.create({
+                            userId: user._id,
+                            sender: 'user',
+                            messageType: messageType,
+                            content: content,
+                            whatsappMessageId: whatsappMessageId,
+                            status: 'delivered',
+                            mediaUrl: mediaUrl,
+                            mediaType: messageType !== 'text' && messageType !== 'interactive' ? messageType : null,
+                            mediaName: mediaName,
+                            mediaSize: mediaSize,
+                            metadata: metadata,
+                            receivedAt: timestamp,
+                            processedAt: new Date()
+                        });
                         return res.sendStatus(200);
                     }
                     
@@ -877,22 +1006,25 @@ const MessageController = {
                         currentNodeId: defaultWorkflow.startNodeId,
                         status: 'active',
                         source: 'whatsapp',
-                        startedAt: new Date(),
-                        lastInteractionAt: new Date(),
+                        startedAt: timestamp,
+                        lastInteractionAt: timestamp,
                         interactionCount: 1
                     });
+                    console.log(`✅ Session created: ${session._id}`);
                 } else {
+                    console.log(`📋 Found existing session: ${session._id}`);
                     // Update session data
                     await UserSession.updateOne(
                         { _id: session._id },
                         { 
-                            $set: { lastInteractionAt: new Date() },
+                            $set: { lastInteractionAt: timestamp },
                             $inc: { interactionCount: 1 }
                         }
                     );
                 }
                 
                 // Store the message
+                console.log(`💾 Storing message in database`);
                 const newMessage = await Message.create({
                     sessionId: session._id,
                     userId: user._id,
@@ -908,43 +1040,156 @@ const MessageController = {
                     mediaType: messageType !== 'text' && messageType !== 'interactive' ? messageType : null,
                     mediaName: mediaName,
                     mediaSize: mediaSize,
-                    metadata: metadata || null  // Store metadata for interactive messages
+                    metadata: metadata,
+                    receivedAt: timestamp,
+                    processedAt: new Date()
                 });
+                
+                console.log(`✅ Message stored: ${newMessage._id}`);
+                
+                // Log activity for message received
+                try {
+                    const { logActivity } = require('../utils/activityLogger');
+                    await logActivity({
+                        actorId: user._id,
+                        actorModel: 'Users',
+                        actorName: user.fullName || user.phone,
+                        action: 'message_received',
+                        entityType: 'Message',
+                        entityId: newMessage._id,
+                        description: `User sent ${messageType} message: "${content.substring(0, 50)}${content.length > 50 ? '...' : ''}"`,
+                        adminId: session.adminId,
+                        userId: user._id,
+                        metadata: {
+                            messageType,
+                            whatsappMessageId,
+                            sessionId: session._id
+                        }
+                    });
+                } catch (activityError) {
+                    console.error("Error logging message received activity:", activityError.message);
+                }
                 
                 // Process workflow if applicable
                 if (session.workflowId && session.currentNodeId) {
                     try {
+                        console.log(`🔄 Processing workflow input`);
                         const { processWorkflowInput } = require('../services/workflowExecutor');
-                        // Pass message type as fourth parameter
-                        await processWorkflowInput(session, content, whatsappMessageId, messageType);
-                        console.log('Processed workflow input');
+                        // Pass the entire message object for better workflow processing
+                        await processWorkflowInput(session, content, whatsappMessageId, messageType, {
+                            message: newMessage,
+                            user: user,
+                            metadata: metadata,
+                            timestamp: timestamp
+                        });
+                        console.log('✅ Workflow input processed successfully');
                     } catch (workflowError) {
-                        console.error('Error processing workflow:', workflowError);
+                        console.error('❌ Error processing workflow:', workflowError);
+                        
+                        // Log workflow error activity
+                        try {
+                            const { logActivity } = require('../utils/activityLogger');
+                            await logActivity({
+                                actorId: session.adminId || user._id,
+                                actorModel: session.adminId ? 'Admins' : 'Users',
+                                actorName: 'System',
+                                action: 'workflow_failed',
+                                entityType: 'Session',
+                                entityId: session._id,
+                                description: `Workflow processing failed for message: ${workflowError.message}`,
+                                adminId: session.adminId,
+                                userId: user._id,
+                                status: 'error',
+                                errorDetails: {
+                                    message: workflowError.message,
+                                    code: workflowError.code || 'WORKFLOW_ERROR'
+                                }
+                            });
+                        } catch (logError) {
+                            console.error("Error logging workflow failure:", logError.message);
+                        }
                     }
                 }
                 
             } else if (value.statuses && value.statuses[0]) {
                 // Handle message status updates
+                console.log(`📊 Processing status update`);
                 const status = value.statuses[0];
                 const statusId = status.id;
-                const statusValue = status.status; // delivered, read, etc.
+                const statusValue = status.status; // delivered, read, sent, failed
+                const timestamp = new Date(parseInt(status.timestamp) * 1000);
+                
+                console.log(`📋 Status: ${statusValue} for message: ${statusId}`);
                 
                 // Update message status in database
-                await Message.findOneAndUpdate(
+                const updateData = { 
+                    status: statusValue,
+                    processedAt: new Date()
+                };
+                
+                // Add specific timestamps based on status
+                switch (statusValue) {
+                    case 'sent':
+                        updateData.sentAt = timestamp;
+                        break;
+                    case 'delivered':
+                        updateData.deliveredAt = timestamp;
+                        break;
+                    case 'read':
+                        updateData.readAt = timestamp;
+                        break;
+                    case 'failed':
+                        updateData.failedAt = timestamp;
+                        updateData.errorDetails = status.errors || null;
+                        break;
+                }
+                
+                const updatedMessage = await Message.findOneAndUpdate(
                     { whatsappMessageId: statusId },
-                    { 
-                        status: statusValue,
-                        deliveredAt: statusValue === 'delivered' ? new Date() : undefined,
-                        readAt: statusValue === 'read' ? new Date() : undefined
-                    }
+                    updateData,
+                    { new: true }
                 );
+                
+                if (updatedMessage) {
+                    console.log(`✅ Message status updated: ${statusId} → ${statusValue}`);
+                } else {
+                    console.log(`⚠️ Message not found for status update: ${statusId}`);
+                }
             }
             
             // Always respond with 200 OK for WhatsApp webhooks
+            console.log(`✅ Webhook processed successfully`);
             return res.sendStatus(200);
             
         } catch (error) {
-            console.error('Error processing message:', error);
+            console.error('❌ Error processing webhook:', error);
+            
+            // Log critical error activity
+            try {
+                const { logActivity } = require('../utils/activityLogger');
+                await logActivity({
+                    actorId: new mongoose.Types.ObjectId(), // System actor
+                    actorModel: 'System',
+                    actorName: 'WhatsApp Webhook System',
+                    action: 'system_error',
+                    entityType: 'System',
+                    description: `WhatsApp webhook processing failed: ${error.message}`,
+                    status: 'error',
+                    priority: 'critical',
+                    errorDetails: {
+                        message: error.message,
+                        stack: error.stack,
+                        code: 'WEBHOOK_ERROR'
+                    },
+                    metadata: {
+                        requestBody: req.body,
+                        timestamp: new Date()
+                    }
+                });
+            } catch (logError) {
+                console.error("Error logging system error:", logError.message);
+            }
+            
             // Always return 200 to WhatsApp to prevent retries
             return res.sendStatus(200);
         }
