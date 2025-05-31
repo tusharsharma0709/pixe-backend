@@ -948,15 +948,39 @@ async function executeWorkflowNode(session, nodeId) {
                                 }
                                 
                                 const result = await surepassServices.generateAadhaarOTP(aadhaarNumber);
-                                console.log('  Aadhaar OTP generation result:', result);
+                                console.log('  ✅ Aadhaar OTP generation result:', JSON.stringify(result, null, 2));
                                 
                                 apiResponseTime = Date.now() - apiStartTime;
                                 apiSuccess = result.success;
                                 
+                                // 🔧 FIXED: Extract client_id from the API response structure
+                                let clientId = null;
+                                if (result.success) {
+                                    // Try different possible locations for client_id
+                                    clientId = result.data?.client_id || result.client_id;
+                                    
+                                    if (clientId) {
+                                        // Store client_id in multiple formats for compatibility
+                                        session.data.client_id = clientId;
+                                        session.data.aadhaarClientId = clientId;
+                                        session.data.clientId = clientId;
+                                        console.log('  ✅ Stored client_id in session:', clientId);
+                                        console.log('  ✅ Session data after storing client_id:', {
+                                            client_id: session.data.client_id,
+                                            aadhaarClientId: session.data.aadhaarClientId,
+                                            clientId: session.data.clientId
+                                        });
+                                    } else {
+                                        console.error('  ❌ No client_id found in OTP generation response');
+                                        console.error('  ❌ Response structure:', JSON.stringify(result, null, 2));
+                                    }
+                                }
+                                
                                 session.data.aadhaarOtpResult = result;
-                                session.data.aadhaarClientId = result.data?.client_id;
                                 session.markModified('data');
                                 await session.save();
+                                
+                                console.log('  ✅ Session saved successfully with client_id:', session.data.client_id);
                                 
                             } catch (error) {
                                 console.error('Error generating Aadhaar OTP:', error);
@@ -964,6 +988,10 @@ async function executeWorkflowNode(session, nodeId) {
                                 apiSuccess = false;
                                 executionSuccess = false;
                                 executionError = error.message;
+                                
+                                session.data.apiError = error.message;
+                                session.markModified('data');
+                                await session.save();
                                 
                                 if (node.errorNodeId) {
                                     return executeWorkflowNode(session, node.errorNodeId);
@@ -975,37 +1003,60 @@ async function executeWorkflowNode(session, nodeId) {
                             console.log('  🔍 Verifying Aadhaar OTP');
                             
                             try {
-                                // 🔧 FIXED: Try multiple client_id field names
-                                const clientId = session.data.client_id || session.data.aadhaarClientId || session.data.clientId;
+                                // 🔧 FIXED: Try multiple client_id field names and check aadhaarOtpResult
+                                let clientId = session.data.client_id || session.data.aadhaarClientId || session.data.clientId;
+                                
+                                // If not found in direct session data, check aadhaarOtpResult
+                                if (!clientId && session.data.aadhaarOtpResult) {
+                                    clientId = session.data.aadhaarOtpResult.data?.client_id || session.data.aadhaarOtpResult.client_id;
+                                    
+                                    if (clientId) {
+                                        // Store it for future use
+                                        session.data.client_id = clientId;
+                                        session.data.aadhaarClientId = clientId;
+                                        session.data.clientId = clientId;
+                                        session.markModified('data');
+                                        await session.save();
+                                        console.log('  ✅ Found and stored client_id from aadhaarOtpResult:', clientId);
+                                    }
+                                }
+                                
                                 const otp = session.data.otp || session.data.aadhaarOtp;
-
+                                
                                 console.log('  🔍 Debug session data:', {
                                     client_id: session.data.client_id,
                                     aadhaarClientId: session.data.aadhaarClientId,
                                     clientId: session.data.clientId,
                                     otp: session.data.otp,
                                     aadhaarOtp: session.data.aadhaarOtp,
+                                    hasAadhaarOtpResult: !!session.data.aadhaarOtpResult,
+                                    aadhaarOtpResultClientId: session.data.aadhaarOtpResult?.data?.client_id,
                                     allData: Object.keys(session.data)
                                 });
-                                                                
-                                if (!clientId || !otp) {
-                                    throw new Error('Client ID and OTP not found in session data');
+                                
+                                if (!clientId) {
+                                    throw new Error('Client ID not found in session data. Available fields: ' + Object.keys(session.data).join(', '));
                                 }
                                 
+                                if (!otp) {
+                                    throw new Error('OTP not found in session data');
+                                }
+                                
+                                console.log('  🔍 Using clientId:', clientId, 'and OTP:', otp);
+                                
                                 const result = await surepassServices.verifyAadhaarOTP(clientId, otp);
-                                console.log('  Aadhaar OTP verification result:', result);
+                                console.log('  ✅ Aadhaar OTP verification result:', result);
                                 
                                 apiResponseTime = Date.now() - apiStartTime;
                                 apiSuccess = result.success;
                                 
                                 session.data.aadhaarVerificationResult = result;
                                 session.data.isAadhaarVerified = result.success;
-                                if (result.success && result.data?.client_id) {
-                                    // 🔧 FIXED: Store client_id in multiple formats for compatibility
-                                    session.data.client_id = result.data.client_id;
-                                    session.data.aadhaarClientId = result.data.client_id;
-                                    session.data.clientId = result.data.client_id;
-                                    console.log('  ✅ Stored client_id in session:', result.data.client_id);
+                                if (result.success && result.data?.full_name) {
+                                    session.data.aadhaarName = result.data.full_name;
+                                    session.data.aadhaarDob = result.data.dob;
+                                    session.data.aadhaarGender = result.data.gender;
+                                    session.data.aadhaarAddress = result.data.address;
                                 }
                                 session.markModified('data');
                                 await session.save();
@@ -1014,15 +1065,16 @@ async function executeWorkflowNode(session, nodeId) {
                                 await Verification.create({
                                     userId: session.userId,
                                     verificationType: 'aadhaar_otp',
-                                    verificationData: {
-                                        client_id: clientId,
-                                        name: result.data?.name,
-                                        raw_response: result.data
+                                    verificationDetails: {
+                                        aadhaarNumber: session.data.aadhaar_number,
+                                        aadhaarName: result.data?.full_name,
+                                        aadhaarDob: result.data?.dob,
+                                        aadhaarGender: result.data?.gender,
+                                        aadhaarAddress: result.data?.address
                                     },
-                                    status: result.success ? 'verified' : 'failed',
-                                    sessionId: session._id,
-                                    workflowId: session.workflowId,
-                                    verifiedAt: new Date(),
+                                    requestData: { client_id: clientId, otp: otp },
+                                    responseData: result.data,
+                                    status: result.success ? 'completed' : 'failed',
                                     provider: 'surepass'
                                 });
                                 
@@ -1033,58 +1085,9 @@ async function executeWorkflowNode(session, nodeId) {
                                 executionSuccess = false;
                                 executionError = error.message;
                                 
-                                if (node.errorNodeId) {
-                                    return executeWorkflowNode(session, node.errorNodeId);
-                                }
-                                throw error;
-                            }
-                        }
-                        else if (node.apiEndpoint === '/api/verification/aadhaar') {
-                            console.log('  🔍 Aadhaar verification');
-                            
-                            try {
-                                const aadhaarNumber = session.data.aadhaar_number || session.data.aadhaarNumber || session.data.aadhaar;
-                                
-                                if (!aadhaarNumber) {
-                                    throw new Error('Aadhaar number not found in session data');
-                                }
-                                
-                                const result = await surepassServices.verifyAadhaar(aadhaarNumber);
-                                console.log('  Aadhaar verification result:', result);
-                                
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = result.success;
-                                
-                                session.data.aadhaarVerificationResult = result;
-                                session.data.isAadhaarVerified = result.success;
-                                if (result.success && result.data?.name) {
-                                    session.data.aadhaarName = result.data.name;
-                                }
+                                session.data.apiError = error.message;
                                 session.markModified('data');
                                 await session.save();
-                                
-                                // Save to Verification model
-                                await Verification.create({
-                                    userId: session.userId,
-                                    verificationType: 'aadhaar',
-                                    verificationData: {
-                                        aadhaar_number: result.data?.aadhaar_number,
-                                        name: result.data?.name,
-                                        raw_response: result.data
-                                    },
-                                    status: result.success ? 'verified' : 'failed',
-                                    sessionId: session._id,
-                                    workflowId: session.workflowId,
-                                    verifiedAt: new Date(),
-                                    provider: 'surepass'
-                                });
-                                
-                            } catch (error) {
-                                console.error('Error verifying Aadhaar:', error);
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = false;
-                                executionSuccess = false;
-                                executionError = error.message;
                                 
                                 if (node.errorNodeId) {
                                     return executeWorkflowNode(session, node.errorNodeId);
@@ -1103,7 +1106,7 @@ async function executeWorkflowNode(session, nodeId) {
                                 }
                                 
                                 const result = await surepassServices.verifyPAN(panNumber);
-                                console.log('  PAN verification result:', result);
+                                console.log('  ✅ PAN verification result:', result);
                                 
                                 apiResponseTime = Date.now() - apiStartTime;
                                 apiSuccess = result.success;
@@ -1112,6 +1115,7 @@ async function executeWorkflowNode(session, nodeId) {
                                 session.data.isPanVerified = result.success;
                                 if (result.success && result.data?.name) {
                                     session.data.panName = result.data.name;
+                                    session.data.panFatherName = result.data.father_name;
                                 }
                                 session.markModified('data');
                                 await session.save();
@@ -1120,15 +1124,14 @@ async function executeWorkflowNode(session, nodeId) {
                                 await Verification.create({
                                     userId: session.userId,
                                     verificationType: 'pan',
-                                    verificationData: {
-                                        pan_number: result.data?.pan_number,
-                                        name: result.data?.name,
-                                        raw_response: result.data
+                                    verificationDetails: {
+                                        panNumber: panNumber,
+                                        panName: result.data?.name,
+                                        panFatherName: result.data?.father_name
                                     },
-                                    status: result.success ? 'verified' : 'failed',
-                                    sessionId: session._id,
-                                    workflowId: session.workflowId,
-                                    verifiedAt: new Date(),
+                                    requestData: { pan_number: panNumber },
+                                    responseData: result.data,
+                                    status: result.success ? 'completed' : 'failed',
                                     provider: 'surepass'
                                 });
                                 
@@ -1138,6 +1141,10 @@ async function executeWorkflowNode(session, nodeId) {
                                 apiSuccess = false;
                                 executionSuccess = false;
                                 executionError = error.message;
+                                
+                                session.data.apiError = error.message;
+                                session.markModified('data');
+                                await session.save();
                                 
                                 if (node.errorNodeId) {
                                     return executeWorkflowNode(session, node.errorNodeId);
@@ -1157,13 +1164,13 @@ async function executeWorkflowNode(session, nodeId) {
                                 }
                                 
                                 const result = await surepassServices.checkAadhaarPANLink(aadhaarNumber, panNumber);
-                                console.log('  Aadhaar-PAN link result:', result);
+                                console.log('  ✅ Aadhaar-PAN link result:', result);
                                 
                                 apiResponseTime = Date.now() - apiStartTime;
                                 apiSuccess = result.success;
                                 
                                 session.data.aadhaarPanLinkResult = result;
-                                session.data.isAadhaarPanLinked = result.success;
+                                session.data.isAadhaarPanLinked = result.success && result.data?.link_status === 'linked';
                                 session.markModified('data');
                                 await session.save();
                                 
@@ -1171,15 +1178,13 @@ async function executeWorkflowNode(session, nodeId) {
                                 await Verification.create({
                                     userId: session.userId,
                                     verificationType: 'aadhaar_pan_link',
-                                    verificationData: {
-                                        aadhaar_number: aadhaarNumber,
-                                        pan_number: panNumber,
-                                        raw_response: result.data
+                                    verificationDetails: {
+                                        aadhaarNumber: aadhaarNumber,
+                                        panNumber: panNumber
                                     },
-                                    status: result.success ? 'verified' : 'failed',
-                                    sessionId: session._id,
-                                    workflowId: session.workflowId,
-                                    verifiedAt: new Date(),
+                                    requestData: { aadhaar_number: aadhaarNumber, pan_number: panNumber },
+                                    responseData: result.data,
+                                    status: result.success ? 'completed' : 'failed',
                                     provider: 'surepass'
                                 });
                                 
@@ -1189,6 +1194,10 @@ async function executeWorkflowNode(session, nodeId) {
                                 apiSuccess = false;
                                 executionSuccess = false;
                                 executionError = error.message;
+                                
+                                session.data.apiError = error.message;
+                                session.markModified('data');
+                                await session.save();
                                 
                                 if (node.errorNodeId) {
                                     return executeWorkflowNode(session, node.errorNodeId);
@@ -1209,7 +1218,7 @@ async function executeWorkflowNode(session, nodeId) {
                                 }
                                 
                                 const result = await surepassServices.verifyBankAccount(accountNumber, ifsc, accountHolderName);
-                                console.log('  Bank verification result:', result);
+                                console.log('  ✅ Bank verification result:', result);
                                 
                                 apiResponseTime = Date.now() - apiStartTime;
                                 apiSuccess = result.success;
@@ -1218,6 +1227,7 @@ async function executeWorkflowNode(session, nodeId) {
                                 session.data.isBankVerified = result.success;
                                 if (result.success && result.data?.account_holder_name) {
                                     session.data.accountHolderName = result.data.account_holder_name;
+                                    session.data.bankName = result.data.bank_name;
                                 }
                                 session.markModified('data');
                                 await session.save();
@@ -1226,16 +1236,15 @@ async function executeWorkflowNode(session, nodeId) {
                                 await Verification.create({
                                     userId: session.userId,
                                     verificationType: 'bank_account',
-                                    verificationData: {
-                                        account_number: result.data?.account_number,
-                                        ifsc: result.data?.ifsc,
-                                        account_holder_name: result.data?.account_holder_name,
-                                        raw_response: result.data
+                                    verificationDetails: {
+                                        accountNumber: accountNumber,
+                                        ifscCode: ifsc,
+                                        accountHolderName: result.data?.account_holder_name,
+                                        bankName: result.data?.bank_name
                                     },
-                                    status: result.success ? 'verified' : 'failed',
-                                    sessionId: session._id,
-                                    workflowId: session.workflowId,
-                                    verifiedAt: new Date(),
+                                    requestData: { account_number: accountNumber, ifsc: ifsc, name: accountHolderName },
+                                    responseData: result.data,
+                                    status: result.success ? 'completed' : 'failed',
                                     provider: 'surepass'
                                 });
                                 
@@ -1246,161 +1255,9 @@ async function executeWorkflowNode(session, nodeId) {
                                 executionSuccess = false;
                                 executionError = error.message;
                                 
-                                if (node.errorNodeId) {
-                                    return executeWorkflowNode(session, node.errorNodeId);
-                                }
-                                throw error;
-                            }
-                        }
-                        else if (node.apiEndpoint === '/api/verification/chassis-to-rc-details') {
-                            console.log('  🔍 Chassis to RC details');
-                            
-                            try {
-                                const chassisNumber = session.data.chassis_number || session.data.chassisNumber;
-                                
-                                if (!chassisNumber) {
-                                    throw new Error('Chassis number not found in session data');
-                                }
-                                
-                                const result = await surepassServices.getChassisToRCDetails(chassisNumber);
-                                console.log('  Chassis to RC result:', result);
-                                
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = result.success;
-                                
-                                session.data.chassisToRcResult = result;
-                                session.data.isChassisVerified = result.success;
-                                if (result.success && result.data) {
-                                    session.data.vehicleDetails = result.data;
-                                }
+                                session.data.apiError = error.message;
                                 session.markModified('data');
                                 await session.save();
-                                
-                                // Save to Verification model
-                                await Verification.create({
-                                    userId: session.userId,
-                                    verificationType: 'chassis_to_rc',
-                                    verificationData: {
-                                        chassis_number: chassisNumber,
-                                        raw_response: result.data
-                                    },
-                                    status: result.success ? 'verified' : 'failed',
-                                    sessionId: session._id,
-                                    workflowId: session.workflowId,
-                                    verifiedAt: new Date(),
-                                    provider: 'surepass'
-                                });
-                                
-                            } catch (error) {
-                                console.error('Error getting chassis to RC details:', error);
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = false;
-                                executionSuccess = false;
-                                executionError = error.message;
-                                
-                                if (node.errorNodeId) {
-                                    return executeWorkflowNode(session, node.errorNodeId);
-                                }
-                                throw error;
-                            }
-                        }
-                        else if (node.apiEndpoint === '/api/verification/company-details') {
-                            console.log('  🔍 Company details verification');
-                            
-                            try {
-                                const cinNumber = session.data.cin_number || session.data.cinNumber || session.data.id_number;
-                                
-                                if (!cinNumber) {
-                                    throw new Error('CIN number not found in session data');
-                                }
-                                
-                                const result = await surepassServices.getCompanyDetails(cinNumber);
-                                console.log('  Company details result:', result);
-                                
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = result.success;
-                                
-                                session.data.companyDetailsResult = result;
-                                session.data.isCompanyVerified = result.success;
-                                if (result.success && result.data) {
-                                    session.data.companyDetails = result.data;
-                                }
-                                session.markModified('data');
-                                await session.save();
-                                
-                                // Save to Verification model
-                                await Verification.create({
-                                    userId: session.userId,
-                                    verificationType: 'company_details',
-                                    verificationData: {
-                                        cin_number: cinNumber,
-                                        raw_response: result.data
-                                    },
-                                    status: result.success ? 'verified' : 'failed',
-                                    sessionId: session._id,
-                                    workflowId: session.workflowId,
-                                    verifiedAt: new Date(),
-                                    provider: 'surepass'
-                                });
-                                
-                            } catch (error) {
-                                console.error('Error getting company details:', error);
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = false;
-                                executionSuccess = false;
-                                executionError = error.message;
-                                
-                                if (node.errorNodeId) {
-                                    return executeWorkflowNode(session, node.errorNodeId);
-                                }
-                                throw error;
-                            }
-                        }
-                        else if (node.apiEndpoint === '/api/verification/din-verification') {
-                            console.log('  🔍 DIN verification');
-                            
-                            try {
-                                const dinNumber = session.data.din_number || session.data.dinNumber || session.data.id_number;
-                                
-                                if (!dinNumber) {
-                                    throw new Error('DIN number not found in session data');
-                                }
-                                
-                                const result = await surepassServices.verifyDIN(dinNumber);
-                                console.log('  DIN verification result:', result);
-                                
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = result.success;
-                                
-                                session.data.dinVerificationResult = result;
-                                session.data.isDinVerified = result.success;
-                                if (result.success && result.data) {
-                                    session.data.dinDetails = result.data;
-                                }
-                                session.markModified('data');
-                                await session.save();
-                                
-                                // Save to Verification model
-                                await Verification.create({
-                                    userId: session.userId,
-                                    verificationType: 'din',
-                                    verificationData: {
-                                        din_number: dinNumber,
-                                        raw_response: result.data
-                                    },
-                                    status: result.success ? 'verified' : 'failed',
-                                    sessionId: session._id,
-                                    workflowId: session.workflowId,
-                                    verifiedAt: new Date(),
-                                    provider: 'surepass'
-                                });
-                                
-                            } catch (error) {
-                                console.error('Error verifying DIN:', error);
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = false;
-                                executionSuccess = false;
-                                executionError = error.message;
                                 
                                 if (node.errorNodeId) {
                                     return executeWorkflowNode(session, node.errorNodeId);
