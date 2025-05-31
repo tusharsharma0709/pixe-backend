@@ -74,257 +74,340 @@ const createNotification = async (data) => {
 const { sendWhatsAppMessage } = require('../services/whatsappServices'); // Import your service
 
 const MessageController = {
-    // Send message from agent to user
-// controllers/MessageController.js - Updated sendMessage method
 
-
-// Send message from agent to user
-sendMessage: async (req, res) => {
-    try {
-        const {
-            userId,
-            sessionId,
-            content,
-            messageType = 'text',
-            mediaUrl,
-            buttons,  // Added for interactive messages
-            metadata
-        } = req.body;
-
-        const agentId = req.agentId;
-        const adminId = req.adminId;
-
-        // Validate required fields
-        if (!userId || !content) {
-            return res.status(400).json({
-                success: false,
-                message: "User ID and content are required"
-            });
-        }
-
-        // Validate message type specific requirements
-        if (['image', 'document', 'video'].includes(messageType) && !mediaUrl) {
-            return res.status(400).json({
-                success: false,
-                message: `Media URL is required for ${messageType} messages`
-            });
-        }
-
-        if (['interactive', 'buttons'].includes(messageType) && (!buttons || !Array.isArray(buttons))) {
-            return res.status(400).json({
-                success: false,
-                message: "Buttons array is required for interactive messages"
-            });
-        }
-
-        // Determine sender type based on authentication
-        let senderType, senderId;
-
-        if (agentId) {
-            senderType = 'agent';
-            senderId = agentId;
-
-            // Check if agent has access to this user
-            const leadAssignment = await LeadAssignment.findOne({
+    sendMessage: async (req, res) => {
+        try {
+            const {
                 userId,
-                agentId,
-                status: 'active'
-            });
+                sessionId,
+                content,
+                messageType = 'text',
+                mediaUrl,
+                buttons,  // For interactive messages
+                metadata
+            } = req.body;
 
-            if (!leadAssignment) {
-                return res.status(403).json({
+            const agentId = req.agentId;
+            const adminId = req.adminId;
+
+            console.log(`\n📨 MESSAGE SEND REQUEST`);
+            console.log(`  User ID: ${userId}`);
+            console.log(`  Session ID: ${sessionId}`);
+            console.log(`  Message Type: ${messageType}`);
+            console.log(`  Content: "${content}"`);
+            console.log(`  Requester: ${agentId ? 'Agent' : 'Admin'}`);
+
+            // Validate required fields
+            if (!userId || !content) {
+                return res.status(400).json({
                     success: false,
-                    message: "You don't have permission to message this user"
+                    message: "User ID and content are required"
                 });
             }
 
-        } else if (adminId) {
-            senderType = 'admin';
-            senderId = adminId;
-            // Admin can message any user - no additional permission check needed
+            // Validate message type specific requirements
+            if (['image', 'document', 'video'].includes(messageType) && !mediaUrl) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Media URL is required for ${messageType} messages`
+                });
+            }
 
-        } else {
-            return res.status(401).json({
-                success: false,
-                message: "Authentication required - must be agent or admin"
-            });
-        }
+            if (['interactive', 'buttons'].includes(messageType) && (!buttons || !Array.isArray(buttons) || buttons.length === 0)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Buttons array is required for interactive messages"
+                });
+            }
 
-        // Get user details
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: "User not found"
-            });
-        }
+            // Determine sender type based on authentication
+            let senderType, senderId, senderName = null;
 
-        // Validate user has phone number
-        if (!user.phone) {
-            return res.status(400).json({
-                success: false,
-                message: "User phone number not found"
-            });
-        }
+            if (agentId) {
+                senderType = 'agent';
+                senderId = agentId;
 
-        // Get or create session
-        let session = null;
-        if (sessionId) {
-            session = await UserSession.findById(sessionId);
-        } else {
-            // Find active session for this user
-            session = await UserSession.findOne({
-                userId,
-                status: 'active'
-            }).sort({ createdAt: -1 });
-        }
+                // Check if agent has access to this user
+                const leadAssignment = await LeadAssignment.findOne({
+                    userId,
+                    agentId,
+                    status: 'active'
+                });
 
-        if (!session) {
-            return res.status(404).json({
-                success: false,
-                message: "No active session found"
-            });
-        }
+                if (!leadAssignment) {
+                    return res.status(403).json({
+                        success: false,
+                        message: "You don't have permission to message this user"
+                    });
+                }
 
-        console.log(`\n📞 SENDING MESSAGE TO USER`);
-        console.log(`  User: ${user.fullName || user.phone}`);
-        console.log(`  Type: ${messageType}`);
-        console.log(`  Sender: ${senderType}`);
-
-        // 🔥 USE YOUR WHATSAPP SERVICE HERE
-        const whatsappResult = await sendWhatsAppMessage(
-            user.phone,     // Phone number
-            content,        // Message content
-            messageType,    // Message type
-            mediaUrl,       // Media URL (for media messages)
-            buttons         // Buttons (for interactive messages)
-        );
-
-        console.log(`📱 WhatsApp Result:`, {
-            success: whatsappResult.success,
-            messageId: whatsappResult.messageId,
-            error: whatsappResult.error
-        });
-
-        // Check if WhatsApp message failed
-        if (!whatsappResult.success) {
-            return res.status(500).json({
-                success: false,
-                message: "Failed to send WhatsApp message",
-                error: whatsappResult.error,
-                details: whatsappResult.details
-            });
-        }
-
-        // Create message record
-        const messageData = {
-            sessionId: session._id,
-            userId,
-            sender: senderType,
-            messageType,
-            content,
-            metadata: {
-                ...metadata,
-                whatsappMessageId: whatsappResult.messageId,
-                whatsappResponse: whatsappResult.data
-            },
-            mediaUrl,
-            mediaType: messageType,
-            status: 'sent',
-            whatsappMessageId: whatsappResult.messageId,
-            buttons: ['interactive', 'buttons'].includes(messageType) ? buttons : undefined
-        };
-
-        // Add sender-specific fields
-        if (senderType === 'agent') {
-            messageData.agentId = senderId;
-            messageData.adminId = session.adminId;
-            messageData.campaignId = session.campaignId;
-        } else if (senderType === 'admin') {
-            messageData.adminId = senderId;
-            messageData.campaignId = session.campaignId;
-        }
-
-        const message = new Message(messageData);
-        await message.save();
-
-        // Update session activity
-        session.lastInteractionAt = new Date();
-        session.interactionCount += 1;
-        await session.save();
-
-        // Log activity with proper validation
-        try {
-            let senderName = null;
-            let actorModel = null;
-            let validSenderId = null;
-
-            if (senderType === 'agent') {
-                const agent = await Agent.findById(senderId);
+                // Get agent details
+                const agent = await Agent.findById(agentId);
                 if (agent) {
                     senderName = `${agent.first_name} ${agent.last_name}`;
-                    actorModel = 'Agents';
-                    validSenderId = senderId;
                 }
-            } else if (senderType === 'admin') {
-                const admin = await Admin.findById(senderId);
+
+            } else if (adminId) {
+                senderType = 'admin';
+                senderId = adminId;
+                // Admin can message any user - no additional permission check needed
+
+                // Get admin details
+                const admin = await Admin.findById(adminId);
                 if (admin) {
                     senderName = admin.name || admin.email || 'Admin';
-                    actorModel = 'Admins';
-                    validSenderId = senderId;
+                }
+
+            } else {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required - must be agent or admin"
+                });
+            }
+
+            // Get user details
+            const user = await User.findById(userId);
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    message: "User not found"
+                });
+            }
+
+            // Validate user has phone number
+            if (!user.phone) {
+                return res.status(400).json({
+                    success: false,
+                    message: "User phone number not found - cannot send WhatsApp message"
+                });
+            }
+
+            // Get or create session
+            let session = null;
+            if (sessionId) {
+                session = await UserSession.findById(sessionId);
+                if (!session) {
+                    return res.status(404).json({
+                        success: false,
+                        message: "Session not found"
+                    });
+                }
+            } else {
+                // Find active session for this user
+                session = await UserSession.findOne({
+                    userId,
+                    status: 'active'
+                }).sort({ createdAt: -1 });
+
+                if (!session) {
+                    return res.status(404).json({
+                        success: false,
+                        message: "No active session found for this user"
+                    });
                 }
             }
 
-            // Only log activity if we have valid actor data
-            if (validSenderId && senderName && actorModel) {
-                await logActivity({
-                    actorId: validSenderId,
-                    actorModel: actorModel,
-                    actorName: senderName,
+            console.log(`\n📞 PREPARING WHATSAPP MESSAGE`);
+            console.log(`  Recipient: ${user.fullName || user.phone}`);
+            console.log(`  Phone: ${user.phone}`);
+            console.log(`  Type: ${messageType}`);
+            console.log(`  Sender: ${senderName || senderType}`);
+
+            // 🔥 SEND WHATSAPP MESSAGE USING YOUR SERVICE
+            const whatsappResult = await sendWhatsAppMessage(
+                user.phone,     // Phone number
+                content,        // Message content
+                messageType,    // Message type (text, image, document, video, interactive)
+                mediaUrl,       // Media URL (for media messages)
+                buttons         // Buttons (for interactive messages)
+            );
+
+            console.log(`📱 WhatsApp API Result:`, {
+                success: whatsappResult.success,
+                messageId: whatsappResult.messageId,
+                error: whatsappResult.error
+            });
+
+            // Check if WhatsApp message failed
+            if (!whatsappResult.success) {
+                console.error(`❌ WhatsApp message failed:`, whatsappResult.error);
+                
+                // Still log the attempt in activity logs
+                try {
+                    await ActivityLog.logActivity({
+                        actorId: senderId,
+                        actorModel: senderType === 'agent' ? 'Agents' : 'Admins',
+                        actorName: senderName || `${senderType} user`,
+                        action: 'message_failed',
+                        entityType: 'Message',
+                        entityId: null,
+                        description: `Failed to send ${messageType} message to user ${user.fullName || user.phone}: ${whatsappResult.error}`,
+                        adminId: session.adminId,
+                        status: 'failure',
+                        category: 'communication',
+                        priority: 'medium',
+                        errorDetails: {
+                            message: whatsappResult.error,
+                            details: whatsappResult.details
+                        }
+                    });
+                } catch (logError) {
+                    console.error("Error logging failed message activity:", logError);
+                }
+
+                return res.status(500).json({
+                    success: false,
+                    message: "Failed to send WhatsApp message",
+                    error: whatsappResult.error,
+                    details: whatsappResult.details
+                });
+            }
+
+            // Create message record in database
+            const messageData = {
+                sessionId: session._id,
+                userId,
+                sender: senderType,
+                messageType,
+                content,
+                metadata: {
+                    ...metadata,
+                    whatsappMessageId: whatsappResult.messageId,
+                    whatsappResponse: whatsappResult.data,
+                    sentAt: new Date(),
+                    senderName: senderName
+                },
+                mediaUrl,
+                mediaType: messageType,
+                status: 'sent',
+                whatsappMessageId: whatsappResult.messageId
+            };
+
+            // Add buttons for interactive messages
+            if (['interactive', 'buttons'].includes(messageType) && buttons) {
+                messageData.buttons = buttons;
+                messageData.metadata.buttonCount = buttons.length;
+            }
+
+            // Add sender-specific fields
+            if (senderType === 'agent') {
+                messageData.agentId = senderId;
+                messageData.adminId = session.adminId;
+                messageData.campaignId = session.campaignId;
+            } else if (senderType === 'admin') {
+                messageData.adminId = senderId;
+                messageData.campaignId = session.campaignId;
+            }
+
+            const message = new Message(messageData);
+            await message.save();
+
+            console.log(`💾 Message saved to database:`, {
+                messageId: message._id,
+                whatsappId: whatsappResult.messageId
+            });
+
+            // Update session activity
+            session.lastInteractionAt = new Date();
+            session.interactionCount += 1;
+            session.lastMessageAt = new Date();
+            session.lastMessageType = messageType;
+            session.lastMessageSender = senderType;
+            await session.save();
+
+            // Log successful activity
+            try {
+                await ActivityLog.logActivity({
+                    actorId: senderId,
+                    actorModel: senderType === 'agent' ? 'Agents' : 'Admins',
+                    actorName: senderName || `${senderType} user`,
                     action: 'message_sent',
                     entityType: 'Message',
                     entityId: message._id,
                     description: `${senderType.charAt(0).toUpperCase() + senderType.slice(1)} sent ${messageType} message to user ${user.fullName || user.phone}`,
-                    adminId: session.adminId
+                    adminId: session.adminId,
+                    userId: userId,
+                    sessionId: session._id.toString(),
+                    status: 'success',
+                    category: 'communication',
+                    priority: 'low',
+                    metadata: {
+                        messageType: messageType,
+                        contentLength: content.length,
+                        whatsappMessageId: whatsappResult.messageId,
+                        hasMedia: !!mediaUrl,
+                        hasButtons: !!buttons,
+                        recipientPhone: user.phone
+                    }
                 });
-            } else {
-                console.warn('Activity logging skipped - missing required actor data:', {
-                    senderId: validSenderId,
-                    senderName,
-                    actorModel,
-                    senderType
-                });
+
+                console.log(`📝 Activity logged successfully`);
+            } catch (activityError) {
+                console.error("❌ Error logging message activity:", activityError.message);
+                // Don't throw error - just log it and continue
             }
-        } catch (activityError) {
-            console.error("Error logging activity:", activityError.message);
-            // Don't throw error - just log it and continue
+
+            console.log(`✅ MESSAGE SENT SUCCESSFULLY`);
+            console.log(`  Message ID: ${message._id}`);
+            console.log(`  WhatsApp ID: ${whatsappResult.messageId}`);
+            console.log(`  Recipient: ${user.fullName || user.phone}`);
+
+            return res.status(201).json({
+                success: true,
+                message: "Message sent successfully",
+                data: {
+                    ...message.toObject(),
+                    senderType,
+                    senderName: senderName || `${senderType} user`,
+                    whatsappMessageId: whatsappResult.messageId,
+                    whatsappStatus: 'sent',
+                    recipient: {
+                        userId: user._id,
+                        name: user.fullName,
+                        phone: user.phone
+                    },
+                    session: {
+                        sessionId: session._id,
+                        workflowName: session.workflowName,
+                        currentStep: session.currentStep
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error("❌ CRITICAL ERROR in sendMessage:", error);
+
+            // Log critical error activity
+            try {
+                await ActivityLog.logActivity({
+                    actorId: req.agentId || req.adminId,
+                    actorModel: req.agentId ? 'Agents' : 'Admins',
+                    actorName: 'System Error',
+                    action: 'message_failed',
+                    entityType: 'Message',
+                    entityId: null,
+                    description: `Critical error while sending message: ${error.message}`,
+                    adminId: req.adminId,
+                    status: 'error',
+                    category: 'communication',
+                    priority: 'critical',
+                    errorDetails: {
+                        message: error.message,
+                        stack: error.stack,
+                        code: error.code || 'UNKNOWN_ERROR'
+                    }
+                });
+            } catch (logError) {
+                console.error("Error logging critical error:", logError);
+            }
+
+            return res.status(500).json({
+                success: false,
+                message: "Internal server error while sending message",
+                error: error.message
+            });
         }
-
-        console.log(`✅ MESSAGE SENT SUCCESSFULLY`);
-        console.log(`  Message ID: ${message._id}`);
-        console.log(`  WhatsApp ID: ${whatsappResult.messageId}`);
-
-        return res.status(201).json({
-            success: true,
-            message: "Message sent successfully",
-            data: {
-                ...message.toObject(),
-                senderType,
-                senderName: senderName || `${senderType} user`,
-                whatsappMessageId: whatsappResult.messageId,
-                whatsappStatus: 'sent'
-            }
-        });
-
-    } catch (error) {
-        console.error("❌ Error in sendMessage:", error);
-        return res.status(500).json({
-            success: false,
-            message: "Internal server error",
-            error: error.message
-        });
-    }
-},
+    },
 
     recentChats: async (req, res) => {
         try {
