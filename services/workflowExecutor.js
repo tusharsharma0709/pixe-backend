@@ -999,102 +999,178 @@ async function executeWorkflowNode(session, nodeId) {
                                 throw error;
                             }
                         }
-                        else if (node.apiEndpoint === '/api/verification/aadhaar-v2/submit-otp') {
-                            console.log('  🔍 Verifying Aadhaar OTP');
-                            
-                            try {
-                                // 🔧 FIXED: Try multiple client_id field names and check aadhaarOtpResult
-                                let clientId = session.data.client_id || session.data.aadhaarClientId || session.data.clientId;
-                                
-                                // If not found in direct session data, check aadhaarOtpResult
-                                if (!clientId && session.data.aadhaarOtpResult) {
-                                    clientId = session.data.aadhaarOtpResult.data?.client_id || session.data.aadhaarOtpResult.client_id;
-                                    
-                                    if (clientId) {
-                                        // Store it for future use
-                                        session.data.client_id = clientId;
-                                        session.data.aadhaarClientId = clientId;
-                                        session.data.clientId = clientId;
-                                        session.markModified('data');
-                                        await session.save();
-                                        console.log('  ✅ Found and stored client_id from aadhaarOtpResult:', clientId);
-                                    }
-                                }
-                                
-                                const otp = session.data.otp || session.data.aadhaarOtp;
-                                
-                                console.log('  🔍 Debug session data:', {
-                                    client_id: session.data.client_id,
-                                    aadhaarClientId: session.data.aadhaarClientId,
-                                    clientId: session.data.clientId,
-                                    otp: session.data.otp,
-                                    aadhaarOtp: session.data.aadhaarOtp,
-                                    hasAadhaarOtpResult: !!session.data.aadhaarOtpResult,
-                                    aadhaarOtpResultClientId: session.data.aadhaarOtpResult?.data?.client_id,
-                                    allData: Object.keys(session.data)
-                                });
-                                
-                                if (!clientId) {
-                                    throw new Error('Client ID not found in session data. Available fields: ' + Object.keys(session.data).join(', '));
-                                }
-                                
-                                if (!otp) {
-                                    throw new Error('OTP not found in session data');
-                                }
-                                
-                                console.log('  🔍 Using clientId:', clientId, 'and OTP:', otp);
-                                
-                                const result = await surepassServices.verifyAadhaarOTP(clientId, otp);
-                                console.log('  ✅ Aadhaar OTP verification result:', result);
-                                
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = result.success;
-                                
-                                session.data.aadhaarVerificationResult = result;
-                                session.data.isAadhaarVerified = result.success;
-                                if (result.success && result.data?.full_name) {
-                                    session.data.aadhaarName = result.data.full_name;
-                                    session.data.aadhaarDob = result.data.dob;
-                                    session.data.aadhaarGender = result.data.gender;
-                                    session.data.aadhaarAddress = result.data.address;
-                                }
-                                session.markModified('data');
-                                await session.save();
-                                
-                                // Save to Verification model
-                                await Verification.create({
-                                    userId: session.userId,
-                                    verificationType: 'aadhaar_otp',
-                                    verificationDetails: {
-                                        aadhaarNumber: session.data.aadhaar_number,
-                                        aadhaarName: result.data?.full_name,
-                                        aadhaarDob: result.data?.dob,
-                                        aadhaarGender: result.data?.gender,
-                                        aadhaarAddress: result.data?.address
-                                    },
-                                    requestData: { client_id: clientId, otp: otp },
-                                    responseData: result.data,
-                                    status: result.success ? 'completed' : 'failed',
-                                    provider: 'surepass'
-                                });
-                                
-                            } catch (error) {
-                                console.error('Error verifying Aadhaar OTP:', error);
-                                apiResponseTime = Date.now() - apiStartTime;
-                                apiSuccess = false;
-                                executionSuccess = false;
-                                executionError = error.message;
-                                
-                                session.data.apiError = error.message;
-                                session.markModified('data');
-                                await session.save();
-                                
-                                if (node.errorNodeId) {
-                                    return executeWorkflowNode(session, node.errorNodeId);
-                                }
-                                throw error;
-                            }
+// Add this debug section in the OTP verification part of your executeWorkflowNode function
+else if (node.apiEndpoint === '/api/verification/aadhaar-v2/submit-otp') {
+    console.log('  🔍 Verifying Aadhaar OTP');
+    
+    try {
+        // 🔧 ENHANCED DEBUG: Log the complete aadhaarOtpResult structure
+        console.log('  🔍 FULL DEBUG - aadhaarOtpResult:', JSON.stringify(session.data.aadhaarOtpResult, null, 2));
+        
+        // 🔧 FIXED: Try multiple client_id field names and check aadhaarOtpResult
+        let clientId = session.data.client_id || session.data.aadhaarClientId || session.data.clientId;
+        
+        console.log('  🔍 Initial clientId check:', {
+            client_id: session.data.client_id,
+            aadhaarClientId: session.data.aadhaarClientId,
+            clientId: session.data.clientId
+        });
+        
+        // If not found in direct session data, check aadhaarOtpResult
+        if (!clientId && session.data.aadhaarOtpResult) {
+            console.log('  🔍 Searching in aadhaarOtpResult...');
+            
+            // Try different possible paths for client_id
+            const otpResult = session.data.aadhaarOtpResult;
+            
+            console.log('  🔍 aadhaarOtpResult structure check:', {
+                hasData: !!otpResult.data,
+                dataClientId: otpResult.data?.client_id,
+                rootClientId: otpResult.client_id,
+                success: otpResult.success,
+                keys: Object.keys(otpResult || {})
+            });
+            
+            // Try multiple paths to find client_id
+            clientId = otpResult.data?.client_id || 
+                      otpResult.client_id || 
+                      otpResult.response?.client_id ||
+                      otpResult.result?.client_id;
+            
+            console.log('  🔍 client_id extraction attempts:', {
+                'otpResult.data?.client_id': otpResult.data?.client_id,
+                'otpResult.client_id': otpResult.client_id,
+                'otpResult.response?.client_id': otpResult.response?.client_id,
+                'otpResult.result?.client_id': otpResult.result?.client_id,
+                'final_clientId': clientId
+            });
+            
+            if (clientId) {
+                // Store it for future use
+                session.data.client_id = clientId;
+                session.data.aadhaarClientId = clientId;
+                session.data.clientId = clientId;
+                session.markModified('data');
+                await session.save();
+                console.log('  ✅ Found and stored client_id from aadhaarOtpResult:', clientId);
+            } else {
+                console.error('  ❌ Could not find client_id in aadhaarOtpResult');
+                console.error('  ❌ Complete aadhaarOtpResult:', JSON.stringify(otpResult, null, 2));
+            }
+        }
+        
+        const otp = session.data.otp || session.data.aadhaarOtp;
+        
+        console.log('  🔍 Final debug session data:', {
+            client_id: session.data.client_id,
+            aadhaarClientId: session.data.aadhaarClientId,
+            clientId: session.data.clientId,
+            otp: session.data.otp,
+            aadhaarOtp: session.data.aadhaarOtp,
+            hasAadhaarOtpResult: !!session.data.aadhaarOtpResult,
+            aadhaarOtpResultKeys: session.data.aadhaarOtpResult ? Object.keys(session.data.aadhaarOtpResult) : [],
+            allSessionDataKeys: Object.keys(session.data)
+        });
+        
+        if (!clientId) {
+            // Try one more desperate attempt - check if aadhaarOtpResult has nested structure
+            if (session.data.aadhaarOtpResult) {
+                const flattenObject = (obj, prefix = '') => {
+                    let result = {};
+                    for (let key in obj) {
+                        if (obj[key] && typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
+                            Object.assign(result, flattenObject(obj[key], prefix + key + '.'));
+                        } else {
+                            result[prefix + key] = obj[key];
                         }
+                    }
+                    return result;
+                };
+                
+                const flattened = flattenObject(session.data.aadhaarOtpResult);
+                console.log('  🔍 FLATTENED aadhaarOtpResult structure:', flattened);
+                
+                // Look for any key containing 'client'
+                const clientKeys = Object.keys(flattened).filter(key => key.toLowerCase().includes('client'));
+                console.log('  🔍 Keys containing "client":', clientKeys);
+                
+                if (clientKeys.length > 0) {
+                    clientId = flattened[clientKeys[0]];
+                    console.log('  🔍 Found client_id in flattened structure:', clientId);
+                    
+                    if (clientId) {
+                        session.data.client_id = clientId;
+                        session.data.aadhaarClientId = clientId;
+                        session.data.clientId = clientId;
+                        session.markModified('data');
+                        await session.save();
+                        console.log('  ✅ Stored client_id from flattened search:', clientId);
+                    }
+                }
+            }
+        }
+        
+        if (!clientId) {
+            throw new Error('Client ID not found in session data after exhaustive search. Available fields: ' + Object.keys(session.data).join(', ') + '. aadhaarOtpResult structure: ' + JSON.stringify(session.data.aadhaarOtpResult, null, 2));
+        }
+        
+        if (!otp) {
+            throw new Error('OTP not found in session data');
+        }
+        
+        console.log('  🔍 Using clientId:', clientId, 'and OTP:', otp);
+        
+        const result = await surepassServices.verifyAadhaarOTP(clientId, otp);
+        console.log('  ✅ Aadhaar OTP verification result:', result);
+        
+        apiResponseTime = Date.now() - apiStartTime;
+        apiSuccess = result.success;
+        
+        session.data.aadhaarVerificationResult = result;
+        session.data.isAadhaarVerified = result.success;
+        if (result.success && result.data?.full_name) {
+            session.data.aadhaarName = result.data.full_name;
+            session.data.aadhaarDob = result.data.dob;
+            session.data.aadhaarGender = result.data.gender;
+            session.data.aadhaarAddress = result.data.address;
+        }
+        session.markModified('data');
+        await session.save();
+        
+        // Save to Verification model
+        await Verification.create({
+            userId: session.userId,
+            verificationType: 'aadhaar_otp',
+            verificationDetails: {
+                aadhaarNumber: session.data.aadhaar_number,
+                aadhaarName: result.data?.full_name,
+                aadhaarDob: result.data?.dob,
+                aadhaarGender: result.data?.gender,
+                aadhaarAddress: result.data?.address
+            },
+            requestData: { client_id: clientId, otp: otp },
+            responseData: result.data,
+            status: result.success ? 'completed' : 'failed',
+            provider: 'surepass'
+        });
+        
+    } catch (error) {
+        console.error('Error verifying Aadhaar OTP:', error);
+        apiResponseTime = Date.now() - apiStartTime;
+        apiSuccess = false;
+        executionSuccess = false;
+        executionError = error.message;
+        
+        session.data.apiError = error.message;
+        session.markModified('data');
+        await session.save();
+        
+        if (node.errorNodeId) {
+            return executeWorkflowNode(session, node.errorNodeId);
+        }
+        throw error;
+    }
+}
                         else if (node.apiEndpoint === '/api/verification/pan') {
                             console.log('  🔍 PAN verification');
                             
