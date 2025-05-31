@@ -44,6 +44,27 @@ const userSessionSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.Mixed,
         default: {}
     },
+    // Add these after your existing 'data' field:
+    pendingVariableName: {
+        type: String,
+        default: null
+    },
+    nextNodeIdAfterInput: {
+        type: String,
+        default: null
+    },
+    lastMessageAt: {
+        type: Date,
+        default: null
+    },
+    lastMessageType: {
+        type: String,
+        default: null
+    },
+    lastMessageSender: {
+        type: String,
+        default: null
+    },
     status: {
         type: String,
         enum: ['active', 'paused', 'completed', 'abandoned', 'transferred'],

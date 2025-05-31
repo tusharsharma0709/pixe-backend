@@ -9,16 +9,22 @@ const unifiedGtmService = require('../services/gtmTrackingServices');
 // SurePass endpoint mapping and validation - UPDATED with new endpoints
 const SUREPASS_ENDPOINTS = {
     '/api/verification/aadhaar-v2/generate-otp': {
-        name: 'Aadhaar Verification',
+        name: 'Aadhaar OTP Generation',
         method: 'POST',
-        requiredParams: ['aadhaar_number'],
-        description: 'Verify Aadhaar number using SurePass API'
+        requiredParams: ['aadhaar_number'], // This should match your surepassServices.js
+        description: 'Generate OTP for Aadhaar verification using SurePass API'
     },
     '/api/verification/aadhaar-v2/submit-otp': {
         name: 'Aadhaar OTP Verification', 
         method: 'POST',
         requiredParams: ['client_id', 'otp'],
         description: 'Verify Aadhaar OTP using SurePass API'
+    },
+    '/api/verification/aadhaar': {
+        name: 'Direct Aadhaar Verification',
+        method: 'POST',
+        requiredParams: ['aadhaar_number'],
+        description: 'Verify Aadhaar number directly using SurePass API'
     },
     '/api/verification/pan': {
         name: 'PAN Verification',
@@ -38,8 +44,6 @@ const SUREPASS_ENDPOINTS = {
         requiredParams: ['account_number', 'ifsc'],
         description: 'Verify bank account using SurePass API'
     },
-    
-    // NEW: Added three new endpoints
     '/api/verification/chassis-to-rc-details': {
         name: 'Chassis to RC Details',
         method: 'POST',
@@ -99,19 +103,75 @@ function validateAndProcessSurePassNodes(nodes) {
                 
                 console.log(`🔍 Found SurePass endpoint in node ${node.nodeId}: ${endpoint}`);
                 
-                // Validate required parameters
+                // Validate required parameters - FIXED LOGIC
                 const nodeParams = node.apiParams || {};
-                const missingParams = endpointConfig.requiredParams.filter(param => 
-                    !nodeParams[param] && !nodeParams[param.replace('_', '')] && 
-                    !nodeParams[param.replace('_', 'Number')] // Handle variations like aadhaar_number vs aadhaarNumber
-                );
+                const paramKeys = Object.keys(nodeParams);
+                const paramValues = Object.values(nodeParams);
+                
+                // Check if parameters exist (either as direct values or template variables)
+                const missingParams = endpointConfig.requiredParams.filter(param => {
+                    // Check if the parameter exists as a key
+                    const hasDirectParam = nodeParams.hasOwnProperty(param);
+                    
+                    // Check if any parameter value contains the required variable as template
+                    const hasTemplateParam = paramValues.some(value => {
+                        if (typeof value === 'string') {
+                            // Check for template variables like {{aadhaar_number}}, {{pan_number}}, etc.
+                            const templateVarPattern = new RegExp(`{{\\s*(${param}|${param.replace('_', '')}|${param.replace('_', 'Number')}|${param.replace('_number', '')}|${param.replace('id_', '')})\\s*}}`);
+                            return templateVarPattern.test(value);
+                        }
+                        return false;
+                    });
+                    
+                    // For common mappings, check specific patterns
+                    let hasValidMapping = false;
+                    if (param === 'aadhaar_number') {
+                        hasValidMapping = paramValues.some(val => 
+                            typeof val === 'string' && 
+                            (val.includes('{{aadhaar_number}}') || val.includes('{{aadhaar}}') || val.includes('{{aadhaarNumber}}'))
+                        );
+                    } else if (param === 'pan_number') {
+                        hasValidMapping = paramValues.some(val => 
+                            typeof val === 'string' && 
+                            (val.includes('{{pan_number}}') || val.includes('{{pan}}') || val.includes('{{panNumber}}'))
+                        );
+                    } else if (param === 'account_number') {
+                        hasValidMapping = paramValues.some(val => 
+                            typeof val === 'string' && 
+                            (val.includes('{{account_number}}') || val.includes('{{accountNumber}}'))
+                        );
+                    } else if (param === 'client_id') {
+                        hasValidMapping = paramValues.some(val => 
+                            typeof val === 'string' && 
+                            (val.includes('{{client_id}}') || val.includes('{{clientId}}') || val.includes('{{aadhaarClientId}}'))
+                        );
+                    } else if (param === 'ifsc') {
+                        hasValidMapping = paramValues.some(val => 
+                            typeof val === 'string' && 
+                            (val.includes('{{ifsc}}') || val.includes('{{ifscCode}}'))
+                        );
+                    } else if (param === 'otp') {
+                        hasValidMapping = paramValues.some(val => 
+                            typeof val === 'string' && 
+                            (val.includes('{{otp}}') || val.includes('{{aadhaarOtp}}'))
+                        );
+                    }
+                    
+                    // Parameter is valid if it exists directly, as template, or has valid mapping
+                    return !(hasDirectParam || hasTemplateParam || hasValidMapping);
+                });
+                
+                console.log(`  Validation for ${endpoint}:`);
+                console.log(`  Required params: ${endpointConfig.requiredParams.join(', ')}`);
+                console.log(`  Node params: ${JSON.stringify(nodeParams)}`);
+                console.log(`  Missing params: ${missingParams.join(', ')}`);
                 
                 if (missingParams.length > 0) {
                     validationErrors.push({
                         nodeId: node.nodeId,
                         endpoint: endpoint,
                         missingParams: missingParams,
-                        message: `Node ${node.nodeId} missing required parameters: ${missingParams.join(', ')}`
+                        message: `Node ${node.nodeId} missing required parameters: ${missingParams.join(', ')}. Make sure to use template variables like {{aadhaar_number}}, {{pan_number}}, etc.`
                     });
                 }
                 

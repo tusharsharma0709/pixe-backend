@@ -72,7 +72,27 @@ const userSchema = new mongoose.Schema({
     },
     source: {
         type: String,
+        enum: ['whatsapp', 'web', 'api', 'import', 'facebook'], // Added new options
         default: 'facebook'
+    },
+    fullName: {
+        type: String,
+        trim: true,
+        default: function() {
+            return this.name; // Use name as fallback
+        }
+    },
+    whatsappProfile: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    firstMessageAt: {
+        type: Date,
+        default: null
+    },
+    lastInteractionAt: {
+        type: Date,
+        default: Date.now
     },
     stage: {
         type: String,

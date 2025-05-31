@@ -17,13 +17,21 @@ const verificationSchema = new mongoose.Schema({
         ref: 'Agents',
         default: null
     },
+    // Update your verificationType enum to include the missing SurePass types:
     verificationType: {
         type: String,
         enum: [
             'aadhaar', 
+            'aadhaar_otp',           // ADD THIS
             'pan', 
             'aadhaar_pan_link', 
-            'bank_account', 
+            'bank_account',
+            'chassis_to_rc',         // ADD THIS
+            'company_details',       // ADD THIS
+            'din',                   // ADD THIS
+            'fssai',                 // ADD THIS
+            'gstin',                 // ADD THIS
+            'icai',                  // ADD THIS
             'video_kyc', 
             'email',
             'phone',
