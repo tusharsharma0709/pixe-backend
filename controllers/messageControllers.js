@@ -863,7 +863,7 @@ const MessageController = {
                         
                     case 'image':
                         content = message.image?.caption || 'Image received';
-                        mediaUrl = await this.downloadWhatsAppMedia(message.image?.id); // Download and store media
+                        mediaUrl = null; // Will be handled separately if needed
                         metadata = {
                             whatsappMediaId: message.image?.id,
                             mimeType: message.image?.mime_type,
@@ -874,7 +874,7 @@ const MessageController = {
                         
                     case 'document':
                         content = message.document?.caption || 'Document received';
-                        mediaUrl = await this.downloadWhatsAppMedia(message.document?.id);
+                        mediaUrl = null; // Will be handled separately if needed
                         mediaName = message.document?.filename;
                         mediaSize = message.document?.file_size;
                         metadata = {
@@ -887,7 +887,7 @@ const MessageController = {
                         
                     case 'audio':
                         content = 'Audio received';
-                        mediaUrl = await this.downloadWhatsAppMedia(message.audio?.id);
+                        mediaUrl = null; // Will be handled separately if needed
                         mediaSize = message.audio?.file_size;
                         metadata = {
                             whatsappMediaId: message.audio?.id,
@@ -900,7 +900,7 @@ const MessageController = {
                         
                     case 'video':
                         content = message.video?.caption || 'Video received';
-                        mediaUrl = await this.downloadWhatsAppMedia(message.video?.id);
+                        mediaUrl = null; // Will be handled separately if needed
                         mediaSize = message.video?.file_size;
                         metadata = {
                             whatsappMediaId: message.video?.id,
@@ -960,6 +960,9 @@ const MessageController = {
                         { $set: { lastInteractionAt: timestamp } }
                     );
                 }
+                
+                // Import Workflow model
+                const { Workflow } = require('../models/Workflows');
                 
                 // Find active session or create one if needed
                 let session = await UserSession.findOne({
@@ -1049,7 +1052,6 @@ const MessageController = {
                 
                 // Log activity for message received
                 try {
-                    const { logActivity } = require('../utils/activityLogger');
                     await logActivity({
                         actorId: user._id,
                         actorModel: 'Users',
@@ -1074,21 +1076,13 @@ const MessageController = {
                 if (session.workflowId && session.currentNodeId) {
                     try {
                         console.log(`🔄 Processing workflow input`);
-                        const { processWorkflowInput } = require('../services/workflowExecutor');
-                        // Pass the entire message object for better workflow processing
-                        await processWorkflowInput(session, content, whatsappMessageId, messageType, {
-                            message: newMessage,
-                            user: user,
-                            metadata: metadata,
-                            timestamp: timestamp
-                        });
+                        await processWorkflowInput(session, content, whatsappMessageId, messageType);
                         console.log('✅ Workflow input processed successfully');
                     } catch (workflowError) {
                         console.error('❌ Error processing workflow:', workflowError);
                         
                         // Log workflow error activity
                         try {
-                            const { logActivity } = require('../utils/activityLogger');
                             await logActivity({
                                 actorId: session.adminId || user._id,
                                 actorModel: session.adminId ? 'Admins' : 'Users',
@@ -1166,7 +1160,6 @@ const MessageController = {
             
             // Log critical error activity
             try {
-                const { logActivity } = require('../utils/activityLogger');
                 await logActivity({
                     actorId: new mongoose.Types.ObjectId(), // System actor
                     actorModel: 'System',
