@@ -1,4 +1,5 @@
-// models/ProductCatalogs.js - Updated with comprehensive enum values
+// models/ProductCatalogs.js - Fixed duplicate index warnings
+
 const mongoose = require('mongoose');
 
 const settingsSchema = new mongoose.Schema({
@@ -126,14 +127,15 @@ const productCatalogSchema = new mongoose.Schema({
     adminId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Admins',
-        required: true,
-        index: true
+        required: true
+        // REMOVED: index: true - will be defined in schema.index() below
     },
     facebookCatalogId: {
         type: String,
         default: null,
         unique: true,
         sparse: true
+        // REMOVED: index: true - unique already creates index
     },
     facebookCatalogUrl: {
         type: String,
@@ -159,8 +161,8 @@ const productCatalogSchema = new mongoose.Schema({
             'needs_revision',
             'expired'
         ],
-        default: 'draft',
-        index: true
+        default: 'draft'
+        // REMOVED: index: true - will be defined in schema.index() below
     },
     superAdminId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -178,8 +180,8 @@ const productCatalogSchema = new mongoose.Schema({
     },
     isDefault: {
         type: Boolean,
-        default: false,
-        index: true
+        default: false
+        // REMOVED: index: true - will be defined in schema.index() below
     },
     category: {
         type: String,
@@ -344,6 +346,7 @@ const productCatalogSchema = new mongoose.Schema({
             type: String,
             unique: true,
             sparse: true
+            // REMOVED: index: true - unique already creates index
         }
     },
     // Image and branding
@@ -468,8 +471,8 @@ const productCatalogSchema = new mongoose.Schema({
     // Soft delete
     isDeleted: {
         type: Boolean,
-        default: false,
-        index: true
+        default: false
+        // REMOVED: index: true - will be defined in schema.index() below
     },
     deletedAt: {
         type: Date,
@@ -484,15 +487,15 @@ const productCatalogSchema = new mongoose.Schema({
     collection: 'product_catalogs'
 });
 
-// Indexes for better query performance
+// FIXED: Define all indexes here instead of using index: true on fields
 productCatalogSchema.index({ adminId: 1, status: 1 });
-productCatalogSchema.index({ facebookCatalogId: 1 });
+// REMOVED: facebookCatalogId index - unique: true already creates it
 productCatalogSchema.index({ superAdminId: 1, createdAt: -1 });
 productCatalogSchema.index({ status: 1, createdAt: -1 });
 productCatalogSchema.index({ category: 1, status: 1 });
 productCatalogSchema.index({ businessType: 1 });
 productCatalogSchema.index({ isDefault: 1, adminId: 1 });
-productCatalogSchema.index({ 'seo.slug': 1 });
+// REMOVED: seo.slug index - unique: true already creates it
 productCatalogSchema.index({ isDeleted: 1, status: 1 });
 productCatalogSchema.index({ expiresAt: 1 });
 productCatalogSchema.index({ lastActivityAt: -1 });

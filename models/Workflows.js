@@ -1,4 +1,5 @@
-// models/Workflows.js - Complete updated model based on workflowControllers.js
+// models/Workflows.js - Final fix for templateId duplicate index
+
 const mongoose = require('mongoose');
 
 const workflowNodeSchema = new mongoose.Schema({
@@ -213,8 +214,7 @@ const workflowSchema = new mongoose.Schema({
     adminId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Admins',
-        required: true,
-        index: true
+        required: true
     },
     isActive: {
         type: Boolean,
@@ -340,11 +340,10 @@ const workflowSchema = new mongoose.Schema({
         lastExecutedAt: Date,
         lastAnalyticsUpdate: Date
     },
-    // Add template and cloning support
+    // Add template and cloning support - COMPLETELY REMOVED unique/sparse/index
     templateId: {
-        type: String,
-        sparse: true,
-        unique: true
+        type: String
+        // REMOVED ALL: unique, sparse, index - will ONLY define in schema.index() below
     },
     clonedFrom: {
         type: mongoose.Schema.Types.ObjectId,
@@ -373,8 +372,7 @@ const workflowSchema = new mongoose.Schema({
     // Soft delete support
     isDeleted: {
         type: Boolean,
-        default: false,
-        index: true
+        default: false
     },
     deletedAt: {
         type: Date,
@@ -385,12 +383,12 @@ const workflowSchema = new mongoose.Schema({
     collection: 'workflows'
 });
 
-// Enhanced indexes for better query performance
+// FIXED: Define all indexes here instead of using any field-level index options
 workflowSchema.index({ adminId: 1, isActive: 1 });
 workflowSchema.index({ isTemplate: 1, category: 1 });
 workflowSchema.index({ 'metadata.hasSurePassIntegration': 1 });
 workflowSchema.index({ category: 1, isActive: 1 });
-workflowSchema.index({ templateId: 1 });
+workflowSchema.index({ templateId: 1 }, { unique: true, sparse: true }); // ONLY defined here
 workflowSchema.index({ clonedFrom: 1 });
 workflowSchema.index({ status: 1 });
 workflowSchema.index({ 'analytics.totalExecutions': -1 });

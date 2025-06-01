@@ -1,4 +1,5 @@
-// models/Campaigns.js - Updated with comprehensive enum values
+// models/Campaigns.js - Fixed duplicate index warnings
+
 const mongoose = require('mongoose');
 
 const metricsSchema = new mongoose.Schema({
@@ -129,13 +130,14 @@ const campaignSchema = new mongoose.Schema({
     adminId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Admins',
-        required: true,
-        index: true
+        required: true
+        // REMOVED: index: true - will be defined in schema.index() below
     },
     facebookCampaignId: {
         type: String,
         required: true,
         unique: true
+        // REMOVED: index: true - unique already creates index, no need for schema.index()
     },
     facebookCampaignUrl: {
         type: String,
@@ -167,8 +169,8 @@ const campaignSchema = new mongoose.Schema({
             'disapproved',
             'limited'
         ],
-        default: 'active',
-        index: true
+        default: 'active'
+        // REMOVED: index: true - will be defined in schema.index() below
     },
     objective: {
         type: String,
@@ -461,8 +463,8 @@ const campaignSchema = new mongoose.Schema({
     // Soft delete
     isDeleted: {
         type: Boolean,
-        default: false,
-        index: true
+        default: false
+        // REMOVED: index: true - will be defined in schema.index() below
     },
     deletedAt: {
         type: Date,
@@ -477,10 +479,10 @@ const campaignSchema = new mongoose.Schema({
     collection: 'campaigns'
 });
 
-// Indexes for better query performance
+// FIXED: Define all indexes here instead of using index: true on fields
 campaignSchema.index({ adminId: 1, status: 1 });
 campaignSchema.index({ status: 1, createdAt: -1 });
-campaignSchema.index({ facebookCampaignId: 1 });
+// REMOVED: facebookCampaignId index - unique: true already creates it
 campaignSchema.index({ originalRequestId: 1 });
 campaignSchema.index({ createdBy: 1, createdAt: -1 });
 campaignSchema.index({ workflowId: 1 });

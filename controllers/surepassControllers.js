@@ -1,4 +1,4 @@
-// controllers/surepassControllers.js - Complete with new endpoints
+// controllers/surepassControllers.js
 
 const surepassServices = require('../services/surepassServices');
 
@@ -100,7 +100,7 @@ const verifyBankAccount = async (req, res) => {
   }
 };
 
-// NEW: Get RC details by chassis number
+// Get RC details by chassis number
 const getChassisToRCDetails = async (req, res) => {
   try {
     const { chassis_number } = req.body;
@@ -123,7 +123,7 @@ const getChassisToRCDetails = async (req, res) => {
   }
 };
 
-// NEW: Get company details by CIN
+// Get company details by CIN
 const getCompanyDetails = async (req, res) => {
   try {
     const { id_number } = req.body;
@@ -146,7 +146,7 @@ const getCompanyDetails = async (req, res) => {
   }
 };
 
-// NEW: Verify DIN (Director Identification Number)
+// Verify DIN (Director Identification Number)
 const verifyDIN = async (req, res) => {
   try {
     const { id_number } = req.body;
@@ -165,6 +165,150 @@ const verifyDIN = async (req, res) => {
     res.status(500).json({ 
       error: err.message || 'An error occurred during the API request',
       endpoint: '/corporate/din' 
+    });
+  }
+};
+
+// NEW: 1. Verify Driving License
+const verifyDrivingLicense = async (req, res) => {
+  try {
+    const { id_number, dob } = req.body;
+    
+    if (!id_number) {
+      return res.status(400).json({ 
+        error: 'Driving license number (id_number) is required' 
+      });
+    }
+    
+    if (!dob) {
+      return res.status(400).json({ 
+        error: 'Date of birth (dob) is required in YYYY-MM-DD format' 
+      });
+    }
+    
+    const result = await surepassServices.verifyDrivingLicense(id_number, dob);
+    
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in driving-license-verify:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/driving-license/driving-license' 
+    });
+  }
+};
+
+// NEW: 2. Get GSTIN Advanced Details
+const getGSTINAdvanced = async (req, res) => {
+  try {
+    const { id_number } = req.body;
+    
+    if (!id_number) {
+      return res.status(400).json({ 
+        error: 'GSTIN number (id_number) is required' 
+      });
+    }
+    
+    const result = await surepassServices.getGSTINAdvanced(id_number);
+    
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in gstin-advanced:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/corporate/gstin-advanced' 
+    });
+  }
+};
+
+// NEW: 3. Get GSTIN List by PAN
+const getGSTINByPAN = async (req, res) => {
+  try {
+    const { id_number } = req.body;
+    
+    if (!id_number) {
+      return res.status(400).json({ 
+        error: 'PAN number (id_number) is required' 
+      });
+    }
+    
+    const result = await surepassServices.getGSTINByPAN(id_number);
+    
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in gstin-by-pan:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/corporate/gstin-by-pan' 
+    });
+  }
+};
+
+// NEW: 4. Verify Udyog Aadhaar (UDYAM)
+const verifyUdyogAadhaar = async (req, res) => {
+  try {
+    const { id_number } = req.body;
+    
+    if (!id_number) {
+      return res.status(400).json({ 
+        error: 'Udyam registration number (id_number) is required' 
+      });
+    }
+    
+    const result = await surepassServices.verifyUdyogAadhaar(id_number);
+    
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in udyog-aadhaar-verify:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/corporate/udyog-aadhaar' 
+    });
+  }
+};
+
+// NEW: 5. ITR Compliance Check
+const checkITRCompliance = async (req, res) => {
+  try {
+    const { pan_number } = req.body;
+    
+    if (!pan_number) {
+      return res.status(400).json({ 
+        error: 'PAN number (pan_number) is required' 
+      });
+    }
+    
+    const result = await surepassServices.checkITRCompliance(pan_number);
+    
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in itr-compliance-check:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/itr/itr-compliance-check' 
+    });
+  }
+};
+
+// NEW: 6. Get RC Full Details
+const getRCFullDetails = async (req, res) => {
+  try {
+    const { id_number } = req.body;
+    
+    if (!id_number) {
+      return res.status(400).json({ 
+        error: 'Vehicle registration number (id_number) is required' 
+      });
+    }
+    
+    const result = await surepassServices.getRCFullDetails(id_number);
+    
+    res.status(result.success ? 200 : 400).json(result);
+  } catch (err) {
+    console.error(`Error in rc-full-details:`, err.message || err);
+    res.status(500).json({ 
+      error: err.message || 'An error occurred during the API request',
+      endpoint: '/rc/rc-full' 
     });
   }
 };
@@ -211,14 +355,17 @@ module.exports = {
   udyogVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/udyog/verify'),
   udyamVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/udyam/verify'),
   iecVerification: (req, res) => handleJSONRequest(req, res, '/api/v1/iec/verify'),
-  
-  // Aadhaar OTP and Bank Account Verification
+
   generateAadhaarOTP,
   verifyAadhaarOTP,
   verifyBankAccount,
-  
-  // NEW: Added three new endpoints
   getChassisToRCDetails,
   getCompanyDetails,
-  verifyDIN
+  verifyDIN,
+  verifyDrivingLicense,
+  getGSTINAdvanced,
+  getGSTINByPAN,
+  verifyUdyogAadhaar,
+  checkITRCompliance,
+  getRCFullDetails
 };

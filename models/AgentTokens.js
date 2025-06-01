@@ -33,6 +33,7 @@ const agentTokenSchema = new mongoose.Schema({
         default: function() {
             return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
         }
+        // REMOVED: index: true - TTL index will be defined in schema.index() below
     },
     isRevoked: {
         type: Boolean,

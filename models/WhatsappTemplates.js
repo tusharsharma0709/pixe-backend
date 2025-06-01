@@ -1,4 +1,5 @@
-// models/WhatsappTemplates.js
+// models/WhatsappTemplates.js - Fixed duplicate index warning
+
 const mongoose = require('mongoose');
 
 const whatsappComponentSchema = new mongoose.Schema({
@@ -102,6 +103,7 @@ const whatsappTemplateSchema = new mongoose.Schema({
     facebookTemplateId: {
         type: String,
         default: null
+        // REMOVED: index: true - will be defined in schema.index() below
     },
     components: [whatsappComponentSchema],
     metadata: {
@@ -181,12 +183,13 @@ const whatsappTemplateSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Add indexes for faster queries
+// FIXED: Define all indexes here instead of using index: true on fields
 whatsappTemplateSchema.index({ adminId: 1, status: 1 });
 whatsappTemplateSchema.index({ name: 1, adminId: 1 });
 whatsappTemplateSchema.index({ category: 1, status: 1 });
 whatsappTemplateSchema.index({ reviewedBy: 1, status: 1 });
 whatsappTemplateSchema.index({ isActive: 1, category: 1 });
+whatsappTemplateSchema.index({ facebookTemplateId: 1 }); // Moved from field definition
 
 const WhatsappTemplate = mongoose.model('WhatsappTemplates', whatsappTemplateSchema);
 module.exports = { WhatsappTemplate };

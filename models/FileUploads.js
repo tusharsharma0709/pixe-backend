@@ -77,6 +77,7 @@ const fileUploadSchema = new mongoose.Schema({
     expiresAt: {
         type: Date,
         default: null
+        // REMOVED: index: true - TTL index will be defined in schema.index() below
     },
     isPublic: {
         type: Boolean,

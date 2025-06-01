@@ -11,7 +11,7 @@ const SUREPASS_ENDPOINTS = {
     '/api/verification/aadhaar-v2/generate-otp': {
         name: 'Aadhaar OTP Generation',
         method: 'POST',
-        requiredParams: ['aadhaar_number'], // This should match your surepassServices.js
+        requiredParams: ['aadhaar_number'],
         description: 'Generate OTP for Aadhaar verification using SurePass API'
     },
     '/api/verification/aadhaar-v2/submit-otp': {
@@ -79,6 +79,42 @@ const SUREPASS_ENDPOINTS = {
         method: 'POST',
         requiredParams: ['membership_number'],
         description: 'Verify ICAI membership details using SurePass API'
+    },
+    '/api/verification/driving-license': {
+        name: 'Driving License Verification',
+        method: 'POST',
+        requiredParams: ['license_number', 'dob'],
+        description: 'Verify driving license details using SurePass API'
+    },
+    '/api/verification/gstin-advanced': {
+        name: 'GSTIN Advanced Details',
+        method: 'POST',
+        requiredParams: ['gstin_number'],
+        description: 'Get comprehensive GSTIN details using SurePass API'
+    },
+    '/api/verification/gstin-by-pan': {
+        name: 'GSTIN List by PAN',
+        method: 'POST',
+        requiredParams: ['pan_number'],
+        description: 'Get all GSTIN numbers associated with a PAN using SurePass API'
+    },
+    '/api/verification/udyog-aadhaar': {
+        name: 'Udyog Aadhaar (UDYAM) Verification',
+        method: 'POST',
+        requiredParams: ['udyam_number'],
+        description: 'Verify Udyog Aadhaar/UDYAM registration using SurePass API'
+    },
+    '/api/verification/itr-compliance': {
+        name: 'ITR Compliance Check',
+        method: 'POST',
+        requiredParams: ['pan_number'],
+        description: 'Check ITR compliance status using SurePass API'
+    },
+    '/api/verification/rc-full-details': {
+        name: 'RC Full Details',
+        method: 'POST',
+        requiredParams: ['rc_number'],
+        description: 'Get comprehensive vehicle RC details using SurePass API'
     }
 };
 

@@ -1341,6 +1341,452 @@ else if (node.apiEndpoint === '/api/verification/aadhaar-v2/submit-otp') {
                                 throw error;
                             }
                         }
+                        else if (node.apiEndpoint === '/api/verification/driving-license') {
+                            console.log('  🔍 Driving License verification');
+                            
+                            try {
+                                const licenseNumber = session.data.license_number || session.data.licenseNumber || session.data.driving_license_number;
+                                const dob = session.data.dob || session.data.date_of_birth || session.data.dateOfBirth;
+                                
+                                if (!licenseNumber) {
+                                    throw new Error('Driving license number not found in session data');
+                                }
+                                
+                                if (!dob) {
+                                    throw new Error('Date of birth not found in session data');
+                                }
+                                
+                                const result = await surepassServices.verifyDrivingLicense(licenseNumber, dob);
+                                console.log('  ✅ Driving License verification result:', result);
+                                
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.drivingLicenseResult = result;
+                                session.data.isDrivingLicenseVerified = result.success;
+                                if (result.success && result.data) {
+                                    session.data.licenseName = result.data.name;
+                                    session.data.licenseState = result.data.state;
+                                    session.data.licenseDoe = result.data.doe;
+                                    session.data.vehicleClasses = result.data.vehicle_classes;
+                                    session.data.permanentAddress = result.data.permanent_address;
+                                    session.data.fatherOrHusbandName = result.data.father_or_husband_name;
+                                }
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // Save to Verification model
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'driving_license',
+                                    verificationDetails: {
+                                        licenseNumber: licenseNumber,
+                                        licenseName: result.data?.name,
+                                        licenseState: result.data?.state,
+                                        licenseDob: result.data?.dob,
+                                        licenseDoe: result.data?.doe,
+                                        vehicleClasses: result.data?.vehicle_classes || [],
+                                        permanentAddress: result.data?.permanent_address,
+                                        temporaryAddress: result.data?.temporary_address,
+                                        fatherOrHusbandName: result.data?.father_or_husband_name,
+                                        bloodGroup: result.data?.blood_group
+                                    },
+                                    requestData: { license_number: licenseNumber, dob: dob },
+                                    responseData: result.data,
+                                    status: result.success ? 'completed' : 'failed',
+                                    provider: 'surepass'
+                                });
+                                
+                            } catch (error) {
+                                console.error('Error verifying driving license:', error);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                executionSuccess = false;
+                                executionError = error.message;
+                                
+                                session.data.apiError = error.message;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw error;
+                            }
+                        }
+
+                        // NEW: 2. GSTIN Advanced Details
+                        else if (node.apiEndpoint === '/api/verification/gstin-advanced') {
+                            console.log('  🔍 GSTIN Advanced details lookup');
+                            
+                            try {
+                                const gstinNumber = session.data.gstin_number || session.data.gstinNumber || session.data.gstin;
+                                
+                                if (!gstinNumber) {
+                                    throw new Error('GSTIN number not found in session data');
+                                }
+                                
+                                const result = await surepassServices.getGSTINAdvanced(gstinNumber);
+                                console.log('  ✅ GSTIN Advanced details result:', result);
+                                
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.gstinAdvancedResult = result;
+                                session.data.isGstinAdvancedVerified = result.success;
+                                if (result.success && result.data) {
+                                    session.data.businessName = result.data.business_name;
+                                    session.data.legalName = result.data.legal_name;
+                                    session.data.gstinStatus = result.data.gstin_status;
+                                    session.data.taxpayerType = result.data.taxpayer_type;
+                                    session.data.constitutionOfBusiness = result.data.constitution_of_business;
+                                    session.data.registrationDate = result.data.date_of_registration;
+                                    session.data.annualTurnover = result.data.annual_turnover;
+                                    session.data.principalAddress = result.data.contact_details?.principal?.address;
+                                    session.data.principalEmail = result.data.contact_details?.principal?.email;
+                                    session.data.principalMobile = result.data.contact_details?.principal?.mobile;
+                                }
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // Save to Verification model
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'gstin_advanced',
+                                    verificationDetails: {
+                                        gstinNumber: gstinNumber,
+                                        businessName: result.data?.business_name,
+                                        legalName: result.data?.legal_name,
+                                        gstinStatus: result.data?.gstin_status,
+                                        registrationDate: result.data?.date_of_registration,
+                                        taxpayerType: result.data?.taxpayer_type,
+                                        constitutionOfBusiness: result.data?.constitution_of_business,
+                                        annualTurnover: result.data?.annual_turnover,
+                                        principalBusinessAddress: result.data?.contact_details?.principal?.address,
+                                        principalEmail: result.data?.contact_details?.principal?.email,
+                                        principalMobile: result.data?.contact_details?.principal?.mobile
+                                    },
+                                    requestData: { gstin_number: gstinNumber },
+                                    responseData: result.data,
+                                    status: result.success ? 'completed' : 'failed',
+                                    provider: 'surepass'
+                                });
+                                
+                            } catch (error) {
+                                console.error('Error getting GSTIN advanced details:', error);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                executionSuccess = false;
+                                executionError = error.message;
+                                
+                                session.data.apiError = error.message;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw error;
+                            }
+                        }
+
+                        // NEW: 3. GSTIN List by PAN
+                        else if (node.apiEndpoint === '/api/verification/gstin-by-pan') {
+                            console.log('  🔍 GSTIN list by PAN lookup');
+                            
+                            try {
+                                const panNumber = session.data.pan_number || session.data.panNumber || session.data.pan;
+                                
+                                if (!panNumber) {
+                                    throw new Error('PAN number not found in session data');
+                                }
+                                
+                                const result = await surepassServices.getGSTINByPAN(panNumber);
+                                console.log('  ✅ GSTIN by PAN result:', result);
+                                
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.gstinByPanResult = result;
+                                session.data.isGstinByPanVerified = result.success;
+                                if (result.success && result.data) {
+                                    session.data.gstinList = result.data.gstin_list;
+                                    session.data.gstinCount = result.data.gstin_list ? result.data.gstin_list.length : 0;
+                                }
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // Save to Verification model
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'gstin_by_pan',
+                                    verificationDetails: {
+                                        panNumber: panNumber,
+                                        gstinList: result.data?.gstin_list || []
+                                    },
+                                    requestData: { pan_number: panNumber },
+                                    responseData: result.data,
+                                    status: result.success ? 'completed' : 'failed',
+                                    provider: 'surepass'
+                                });
+                                
+                            } catch (error) {
+                                console.error('Error getting GSTIN by PAN:', error);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                executionSuccess = false;
+                                executionError = error.message;
+                                
+                                session.data.apiError = error.message;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw error;
+                            }
+                        }
+
+                        // NEW: 4. Udyog Aadhaar (UDYAM) Verification
+                        else if (node.apiEndpoint === '/api/verification/udyog-aadhaar') {
+                            console.log('  🔍 Udyog Aadhaar (UDYAM) verification');
+                            
+                            try {
+                                const udyamNumber = session.data.udyam_number || session.data.udyamNumber || session.data.udyog_aadhaar;
+                                
+                                if (!udyamNumber) {
+                                    throw new Error('Udyam registration number not found in session data');
+                                }
+                                
+                                const result = await surepassServices.verifyUdyogAadhaar(udyamNumber);
+                                console.log('  ✅ Udyog Aadhaar verification result:', result);
+                                
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.udyogAadhaarResult = result;
+                                session.data.isUdyogAadhaarVerified = result.success;
+                                if (result.success && result.data) {
+                                    session.data.enterpriseName = result.data.main_details?.name_of_enterprise;
+                                    session.data.majorActivity = result.data.main_details?.major_activity;
+                                    session.data.enterpriseType = result.data.main_details?.enterprise_type_list?.[0]?.enterprise_type;
+                                    session.data.dateOfCommencement = result.data.main_details?.date_of_commencement;
+                                    session.data.organizationType = result.data.main_details?.organization_type;
+                                    session.data.socialCategory = result.data.main_details?.social_category;
+                                    session.data.udyamState = result.data.main_details?.state;
+                                    session.data.udyamCity = result.data.main_details?.city;
+                                    session.data.udyamPin = result.data.main_details?.pin;
+                                }
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // Save to Verification model
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'udyog_aadhaar',
+                                    verificationDetails: {
+                                        udyamNumber: udyamNumber,
+                                        enterpriseName: result.data?.main_details?.name_of_enterprise,
+                                        majorActivity: result.data?.main_details?.major_activity,
+                                        enterpriseType: result.data?.main_details?.enterprise_type_list?.[0]?.enterprise_type,
+                                        dateOfCommencement: result.data?.main_details?.date_of_commencement,
+                                        organizationType: result.data?.main_details?.organization_type,
+                                        socialCategory: result.data?.main_details?.social_category,
+                                        udyamState: result.data?.main_details?.state,
+                                        udyamCity: result.data?.main_details?.city,
+                                        udyamPin: result.data?.main_details?.pin
+                                    },
+                                    requestData: { udyam_number: udyamNumber },
+                                    responseData: result.data,
+                                    status: result.success ? 'completed' : 'failed',
+                                    provider: 'surepass'
+                                });
+                                
+                            } catch (error) {
+                                console.error('Error verifying Udyog Aadhaar:', error);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                executionSuccess = false;
+                                executionError = error.message;
+                                
+                                session.data.apiError = error.message;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw error;
+                            }
+                        }
+
+                        // NEW: 5. ITR Compliance Check
+                        else if (node.apiEndpoint === '/api/verification/itr-compliance') {
+                            console.log('  🔍 ITR Compliance check');
+                            
+                            try {
+                                const panNumber = session.data.pan_number || session.data.panNumber || session.data.pan;
+                                
+                                if (!panNumber) {
+                                    throw new Error('PAN number not found in session data');
+                                }
+                                
+                                const result = await surepassServices.checkITRCompliance(panNumber);
+                                console.log('  ✅ ITR Compliance check result:', result);
+                                
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.itrComplianceResult = result;
+                                session.data.isItrCompliant = result.success && result.data?.compliant;
+                                if (result.success && result.data) {
+                                    session.data.panCompliant = result.data.compliant;
+                                    session.data.panAllotmentDate = result.data.pan_allotment_date;
+                                    session.data.maskedName = result.data.masked_name;
+                                    session.data.panAadhaarLinked = result.data.pan_aadhaar_linked;
+                                    session.data.panStatus = result.data.pan_status;
+                                    session.data.validPan = result.data.valid_pan;
+                                    session.data.specifiedPersonUnder206 = result.data.specified_person_under_206;
+                                }
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // Save to Verification model
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'itr_compliance',
+                                    verificationDetails: {
+                                        panNumber: panNumber,
+                                        panCompliant: result.data?.compliant,
+                                        panAllotmentDate: result.data?.pan_allotment_date,
+                                        maskedName: result.data?.masked_name,
+                                        panAadhaarLinked: result.data?.pan_aadhaar_linked,
+                                        panStatus: result.data?.pan_status,
+                                        validPan: result.data?.valid_pan,
+                                        specifiedPersonUnder206: result.data?.specified_person_under_206
+                                    },
+                                    requestData: { pan_number: panNumber },
+                                    responseData: result.data,
+                                    status: result.success ? 'completed' : 'failed',
+                                    provider: 'surepass'
+                                });
+                                
+                            } catch (error) {
+                                console.error('Error checking ITR compliance:', error);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                executionSuccess = false;
+                                executionError = error.message;
+                                
+                                session.data.apiError = error.message;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw error;
+                            }
+                        }
+
+                        // NEW: 6. RC Full Details
+                        else if (node.apiEndpoint === '/api/verification/rc-full-details') {
+                            console.log('  🔍 RC Full details lookup');
+                            
+                            try {
+                                const rcNumber = session.data.rc_number || session.data.rcNumber || session.data.vehicle_registration;
+                                
+                                if (!rcNumber) {
+                                    throw new Error('Vehicle registration number not found in session data');
+                                }
+                                
+                                const result = await surepassServices.getRCFullDetails(rcNumber);
+                                console.log('  ✅ RC Full details result:', result);
+                                
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = result.success;
+                                
+                                session.data.rcFullDetailsResult = result;
+                                session.data.isRcFullDetailsVerified = result.success;
+                                if (result.success && result.data) {
+                                    session.data.ownerName = result.data.owner_name;
+                                    session.data.rcFatherName = result.data.father_name;
+                                    session.data.vehicleCategory = result.data.vehicle_category;
+                                    session.data.vehicleChasiNumber = result.data.vehicle_chasi_number;
+                                    session.data.vehicleEngineNumber = result.data.vehicle_engine_number;
+                                    session.data.makerDescription = result.data.maker_description;
+                                    session.data.makerModel = result.data.maker_model;
+                                    session.data.fuelType = result.data.fuel_type;
+                                    session.data.vehicleColor = result.data.color;
+                                    session.data.manufacturingDate = result.data.manufacturing_date;
+                                    session.data.rcRegistrationDate = result.data.registration_date;
+                                    session.data.financer = result.data.financer;
+                                    session.data.financed = result.data.financed;
+                                    session.data.insuranceCompany = result.data.insurance_company;
+                                    session.data.insurancePolicyNumber = result.data.insurance_policy_number;
+                                    session.data.insuranceUpto = result.data.insurance_upto;
+                                }
+                                session.markModified('data');
+                                await session.save();
+                                
+                                // Save to Verification model
+                                await Verification.create({
+                                    userId: session.userId,
+                                    verificationType: 'rc_full_details',
+                                    verificationDetails: {
+                                        rcNumber: rcNumber,
+                                        ownerName: result.data?.owner_name,
+                                        rcFatherName: result.data?.father_name,
+                                        vehicleCategory: result.data?.vehicle_category,
+                                        vehicleChasiNumber: result.data?.vehicle_chasi_number,
+                                        vehicleEngineNumber: result.data?.vehicle_engine_number,
+                                        makerDescription: result.data?.maker_description,
+                                        makerModel: result.data?.maker_model,
+                                        bodyType: result.data?.body_type,
+                                        fuelType: result.data?.fuel_type,
+                                        vehicleColor: result.data?.color,
+                                        manufacturingDate: result.data?.manufacturing_date,
+                                        rcRegistrationDate: result.data?.registration_date,
+                                        financer: result.data?.financer,
+                                        financed: result.data?.financed,
+                                        insuranceCompany: result.data?.insurance_company,
+                                        insurancePolicyNumber: result.data?.insurance_policy_number,
+                                        insuranceUpto: result.data?.insurance_upto,
+                                        fitUpTo: result.data?.fit_up_to,
+                                        taxUpTo: result.data?.tax_upto,
+                                        permitNumber: result.data?.permit_number,
+                                        permitType: result.data?.permit_type,
+                                        permitValidUpto: result.data?.permit_valid_upto,
+                                        seatCapacity: result.data?.seat_capacity,
+                                        cubicCapacity: result.data?.cubic_capacity,
+                                        vehicleGrossWeight: result.data?.vehicle_gross_weight,
+                                        unladenWeight: result.data?.unladen_weight,
+                                        rcStatus: result.data?.rc_status
+                                    },
+                                    requestData: { rc_number: rcNumber },
+                                    responseData: result.data,
+                                    status: result.success ? 'completed' : 'failed',
+                                    provider: 'surepass'
+                                });
+                                
+                            } catch (error) {
+                                console.error('Error getting RC full details:', error);
+                                apiResponseTime = Date.now() - apiStartTime;
+                                apiSuccess = false;
+                                executionSuccess = false;
+                                executionError = error.message;
+                                
+                                session.data.apiError = error.message;
+                                session.markModified('data');
+                                await session.save();
+                                
+                                if (node.errorNodeId) {
+                                    return executeWorkflowNode(session, node.errorNodeId);
+                                }
+                                throw error;
+                            }
+                        }
                         else {
                             // For other APIs, make actual HTTP call
                             const params = {};

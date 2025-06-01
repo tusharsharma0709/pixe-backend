@@ -1149,38 +1149,26 @@ exports.publishProduct = async (req, res) => {
         }
 
         // DEBUG: Log the product request data
-        console.log('Product Request Inventory:', productRequest.inventory);
-        console.log('Product Request Shipping:', productRequest.shipping);
-
-        // Prepare product data with proper field mapping
-        const productData = {
+        console.log('Publishing product:', {
             name: productRequest.name,
-            description: productRequest.description,
-            shortDescription: productRequest.shortDescription,
-            price: productRequest.price,
-            salePrice: productRequest.salePrice,
-            costPrice: productRequest.costPrice,
-            currency: productRequest.currency,
-            category: productRequest.category,
-            subCategory: productRequest.subCategory,
-            brand: productRequest.brand,
-            manufacturer: productRequest.manufacturer,
-            model: productRequest.model,
-            images: productRequest.images,
-            attributes: productRequest.attributes,
-            
-            // FIXED: Properly map inventory fields
-            inventory: {
+            catalogId: productRequest.catalogId,
+            inventory: productRequest.inventory
+        });
+
+        // Prepare product details object to store complex data
+        const productDetails = {
+            // Store the original detailed inventory data
+            detailedInventory: {
                 quantity: productRequest.inventory?.quantity || 0,
                 sku: productRequest.inventory?.sku || null,
                 barcode: productRequest.inventory?.barcode || null,
                 managementType: productRequest.inventory?.managementType || 'manual',
                 lowStockThreshold: productRequest.inventory?.lowStockThreshold || 5,
                 allowBackorders: productRequest.inventory?.allowBackorders || false,
-                trackQuantity: productRequest.inventory?.trackQuantity !== false // Default to true
+                trackQuantity: productRequest.inventory?.trackQuantity !== false
             },
             
-            // FIXED: Properly map shipping fields
+            // Store shipping information
             shipping: {
                 weight: productRequest.shipping?.weight || null,
                 weightUnit: productRequest.shipping?.weightUnit || 'kg',
@@ -1195,6 +1183,14 @@ exports.publishProduct = async (req, res) => {
                 handlingInstructions: productRequest.shipping?.handlingInstructions || null
             },
             
+            // Store additional product information
+            category: productRequest.category,
+            subCategory: productRequest.subCategory,
+            brand: productRequest.brand,
+            manufacturer: productRequest.manufacturer,
+            model: productRequest.model,
+            attributes: productRequest.attributes || [],
+            
             // Product characteristics
             productType: productRequest.productType || 'physical',
             isDigital: productRequest.isDigital || false,
@@ -1204,15 +1200,13 @@ exports.publishProduct = async (req, res) => {
             ageRestricted: productRequest.ageRestricted || false,
             minimumAge: productRequest.minimumAge || null,
             
-            // Status and references
-            status: 'active', // Published products are active
-            catalogId: productRequest.catalogId,
-            adminId: productRequest.adminId,
-            superAdminId: superAdminId,
-            productRequestId: productRequest._id,
+            // Pricing details
+            salePrice: productRequest.salePrice || null,
+            costPrice: productRequest.costPrice || null,
+            currency: productRequest.currency || 'INR',
             
             // Tax information
-            taxable: productRequest.taxable !== false, // Default to true
+            taxable: productRequest.taxable !== false,
             taxClass: productRequest.taxClass || 'standard',
             taxRate: productRequest.taxRate || null,
             hsnCode: productRequest.hsnCode || null,
@@ -1268,40 +1262,53 @@ exports.publishProduct = async (req, res) => {
                 isLimitedStock: productRequest.features?.isLimitedStock || false
             },
             
-            // Facebook integration
-            facebookRetailerId: productRequest.facebookRetailerId || null,
-            
-            // Timestamps
-            publishedAt: new Date(),
-            createdAt: new Date(),
-            updatedAt: new Date()
+            // Store the original request reference
+            productRequestId: productRequest._id,
+            publishedBy: superAdminId,
+            publishedAt: new Date()
+        };
+
+        // Convert images array to simple string array
+        const imageUrls = [];
+        if (productRequest.images && Array.isArray(productRequest.images)) {
+            productRequest.images.forEach(img => {
+                if (typeof img === 'string') {
+                    imageUrls.push(img);
+                } else if (img && img.url) {
+                    imageUrls.push(img.url);
+                }
+            });
+        }
+
+        // Create product data matching your simple Product model
+        const productData = {
+            name: productRequest.name,
+            description: productRequest.description || '',
+            adminId: productRequest.adminId,
+            price: productRequest.price,
+            categoryId: null, // You might want to map this based on your Facebook catalog
+            catalogId: productRequest.catalogId.toString(), // Convert ObjectId to string
+            facebookProductId: productRequest.facebookRetailerId || null,
+            status: 'active', // Published products are active
+            images: imageUrls,
+            productDetails: productDetails, // Store all complex data here
+            inventory: productRequest.inventory?.quantity || 0, // Simple number for inventory
+            superAdminNotes: productRequest.superAdminNotes || null,
+            reviewedBy: superAdminId,
+            reviewedAt: new Date()
         };
 
         // DEBUG: Log the prepared product data
         console.log('Prepared Product Data:', {
             name: productData.name,
             inventory: productData.inventory,
-            shipping: productData.shipping,
-            catalogId: productData.catalogId
+            catalogId: productData.catalogId,
+            imagesCount: productData.images.length,
+            hasProductDetails: Object.keys(productData.productDetails).length > 0
         });
 
-        // Create new product in Products collection
+        // Create new product
         const product = new Product(productData);
-        
-        // Validate before saving
-        const validationError = product.validateSync();
-        if (validationError) {
-            console.error('Product validation error:', validationError.errors);
-            return res.status(400).json({
-                success: false,
-                message: "Product validation failed",
-                errors: Object.keys(validationError.errors).map(key => ({
-                    field: key,
-                    message: validationError.errors[key].message,
-                    value: validationError.errors[key].value
-                }))
-            });
-        }
 
         // Save the new product
         await product.save();
@@ -1340,7 +1347,9 @@ exports.publishProduct = async (req, res) => {
                     status: product.status,
                     catalogId: product.catalogId,
                     inventory: product.inventory,
-                    publishedAt: product.publishedAt
+                    price: product.price,
+                    images: product.images,
+                    createdAt: product.createdAt
                 },
                 productRequest: {
                     _id: productRequest._id,

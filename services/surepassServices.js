@@ -1,4 +1,4 @@
-// services/surepassServices.js - Complete with new endpoints
+// services/surepassServices.js
 
 const axios = require('axios');
 const FormData = require('form-data');
@@ -363,7 +363,7 @@ const verifyBankAccount = async (accountNumber, ifsc, accountHolderName = '', fe
 };
 
 /**
- * NEW: Get RC details by chassis number
+ * Get RC details by chassis number
  * @param {String} chassisNumber - Vehicle chassis number
  * @returns {Promise} - API response
  */
@@ -398,7 +398,7 @@ const getChassisToRCDetails = async (chassisNumber) => {
 };
 
 /**
- * NEW: Get company details by CIN
+ * Get company details by CIN
  * @param {String} cin - Company Identification Number
  * @returns {Promise} - API response
  */
@@ -433,7 +433,7 @@ const getCompanyDetails = async (cin) => {
 };
 
 /**
- * NEW: Verify DIN (Director Identification Number)
+ * Verify DIN (Director Identification Number)
  * @param {String} dinNumber - Director Identification Number
  * @returns {Promise} - API response
  */
@@ -468,6 +468,226 @@ const verifyDIN = async (dinNumber) => {
 };
 
 /**
+ * Verify Driving License
+ * @param {String} licenseNumber - Driving license number
+ * @param {String} dob - Date of birth in YYYY-MM-DD format
+ * @returns {Promise} - API response
+ */
+const verifyDrivingLicense = async (licenseNumber, dob) => {
+    try {
+        const cleanLicenseNumber = licenseNumber.replace(/\s/g, '').toUpperCase();
+        
+        console.log(`Verifying Driving License: ${cleanLicenseNumber} with DOB: ${dob}`);
+        
+        if (!cleanLicenseNumber || cleanLicenseNumber.length < 10) {
+            console.error('Invalid driving license number format');
+            return {
+                success: false,
+                error: 'Invalid driving license number format. Must be at least 10 characters.'
+            };
+        }
+        
+        if (!dob || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) {
+            console.error('Invalid date of birth format');
+            return {
+                success: false,
+                error: 'Invalid date of birth format. Must be YYYY-MM-DD.'
+            };
+        }
+        
+        const response = await postJSON('/driving-license/driving-license', {
+            id_number: cleanLicenseNumber,
+            dob: dob
+        });
+        
+        console.log('DEBUG: Full driving license verification response:', JSON.stringify(response, null, 2));
+        
+        return response;
+    } catch (error) {
+        console.error('Driving license verification error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * Get GSTIN Advanced Details
+ * @param {String} gstin - 15-character GSTIN number
+ * @returns {Promise} - API response
+ */
+const getGSTINAdvanced = async (gstin) => {
+    try {
+        const cleanGSTIN = gstin.replace(/\s/g, '').toUpperCase();
+        
+        console.log(`Getting GSTIN advanced details for: ${cleanGSTIN}`);
+        
+        if (!cleanGSTIN || cleanGSTIN.length !== 15) {
+            console.error('Invalid GSTIN format');
+            return {
+                success: false,
+                error: 'Invalid GSTIN format. Must be exactly 15 characters.'
+            };
+        }
+        
+        const response = await postJSON('/corporate/gstin-advanced', {
+            id_number: cleanGSTIN
+        });
+        
+        console.log('DEBUG: Full GSTIN advanced response:', JSON.stringify(response, null, 2));
+        
+        return response;
+    } catch (error) {
+        console.error('GSTIN advanced details error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * Get GSTIN List by PAN
+ * @param {String} panNumber - 10-character PAN number
+ * @returns {Promise} - API response
+ */
+const getGSTINByPAN = async (panNumber) => {
+    try {
+        const cleanPanNumber = panNumber.replace(/\s/g, '').toUpperCase();
+        
+        console.log(`Getting GSTIN list for PAN: ${cleanPanNumber}`);
+        
+        if (cleanPanNumber.length !== 10 || !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanPanNumber)) {
+            console.error('Invalid PAN number format');
+            return {
+                success: false,
+                error: 'Invalid PAN number format. Must be 10 characters with format AAAAA0000A.'
+            };
+        }
+        
+        const response = await postJSON('/corporate/gstin-by-pan', {
+            id_number: cleanPanNumber
+        });
+        
+        console.log('DEBUG: Full GSTIN by PAN response:', JSON.stringify(response, null, 2));
+        
+        return response;
+    } catch (error) {
+        console.error('GSTIN by PAN error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * Verify Udyog Aadhaar (UDYAM)
+ * @param {String} udyamNumber - Udyam registration number
+ * @returns {Promise} - API response
+ */
+const verifyUdyogAadhaar = async (udyamNumber) => {
+    try {
+        const cleanUdyamNumber = udyamNumber.replace(/\s/g, '').toUpperCase();
+        
+        console.log(`Verifying Udyog Aadhaar: ${cleanUdyamNumber}`);
+        
+        if (!cleanUdyamNumber || !cleanUdyamNumber.startsWith('UDYAM-')) {
+            console.error('Invalid Udyam number format');
+            return {
+                success: false,
+                error: 'Invalid Udyam number format. Must start with UDYAM-.'
+            };
+        }
+        
+        const response = await postJSON('/corporate/udyog-aadhaar', {
+            id_number: cleanUdyamNumber
+        });
+        
+        console.log('DEBUG: Full Udyog Aadhaar verification response:', JSON.stringify(response, null, 2));
+        
+        return response;
+    } catch (error) {
+        console.error('Udyog Aadhaar verification error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * ITR Compliance Check
+ * @param {String} panNumber - 10-character PAN number
+ * @returns {Promise} - API response
+ */
+const checkITRCompliance = async (panNumber) => {
+    try {
+        const cleanPanNumber = panNumber.replace(/\s/g, '').toUpperCase();
+        
+        console.log(`Checking ITR compliance for PAN: ${cleanPanNumber}`);
+        
+        if (cleanPanNumber.length !== 10 || !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanPanNumber)) {
+            console.error('Invalid PAN number format');
+            return {
+                success: false,
+                error: 'Invalid PAN number format. Must be 10 characters with format AAAAA0000A.'
+            };
+        }
+        
+        const response = await postJSON('/itr/itr-compliance-check', {
+            pan_number: cleanPanNumber
+        });
+        
+        console.log('DEBUG: Full ITR compliance check response:', JSON.stringify(response, null, 2));
+        
+        return response;
+    } catch (error) {
+        console.error('ITR compliance check error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * Get RC Full Details
+ * @param {String} rcNumber - Vehicle registration number
+ * @returns {Promise} - API response
+ */
+const getRCFullDetails = async (rcNumber) => {
+    try {
+        const cleanRCNumber = rcNumber.replace(/\s/g, '').toUpperCase();
+        
+        console.log(`Getting RC full details for: ${cleanRCNumber}`);
+        
+        if (!cleanRCNumber || cleanRCNumber.length < 8) {
+            console.error('Invalid RC number format');
+            return {
+                success: false,
+                error: 'Invalid RC number format. Must be at least 8 characters.'
+            };
+        }
+        
+        const response = await postJSON('/rc/rc-full', {
+            id_number: cleanRCNumber
+        });
+        
+        console.log('DEBUG: Full RC details response:', JSON.stringify(response, null, 2));
+        
+        return response;
+    } catch (error) {
+        console.error('RC full details error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
  * Helper function to mask Aadhaar number for logging purposes
  * @param {String} aadhaarNumber - Aadhaar number to mask
  * @returns {String} - Masked Aadhaar number
@@ -480,7 +700,7 @@ const maskAadhaarNumber = (aadhaarNumber) => {
     return `${aadhaarNumber.substring(0, 4)}XXXX${aadhaarNumber.substring(8)}`;
 };
 
-// Export the functions
+// Export all functions
 module.exports = {
     postJSON,
     postFormData,
@@ -491,9 +711,13 @@ module.exports = {
     generateAadhaarOTP,
     verifyAadhaarOTP,
     verifyBankAccount,
-    
-    // NEW: Export new functions
     getChassisToRCDetails,
     getCompanyDetails,
-    verifyDIN
+    verifyDIN,
+    verifyDrivingLicense,
+    getGSTINAdvanced,
+    getGSTINByPAN,
+    verifyUdyogAadhaar,
+    checkITRCompliance,
+    getRCFullDetails
 };

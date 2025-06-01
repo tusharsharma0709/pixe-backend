@@ -1,4 +1,5 @@
-// models/CampaignRequests.js - Updated with comprehensive enum values
+// models/CampaignRequests.js - Fixed duplicate index warnings
+
 const mongoose = require('mongoose');
 
 const targetingSchema = new mongoose.Schema({
@@ -160,8 +161,8 @@ const campaignRequestSchema = new mongoose.Schema({
     adminId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Admins',
-        required: true,
-        index: true
+        required: true
+        // REMOVED: index: true - will be defined in schema.index() below
     },
     name: {
         type: String,
@@ -260,8 +261,8 @@ const campaignRequestSchema = new mongoose.Schema({
             'cancelled',
             'expired'
         ],
-        default: 'draft',
-        index: true
+        default: 'draft'
+        // REMOVED: index: true - will be defined in schema.index() below
     },
     priority: {
         type: String,
@@ -375,13 +376,14 @@ const campaignRequestSchema = new mongoose.Schema({
             // Auto-expire draft campaigns after 30 days
             return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
         }
+        // REMOVED: index: true - will be defined in schema.index() below
     }
 }, {
     timestamps: true,
     collection: 'campaign_requests'
 });
 
-// Indexes for better query performance
+// FIXED: Define all indexes here instead of using index: true on fields
 campaignRequestSchema.index({ adminId: 1, status: 1 });
 campaignRequestSchema.index({ superAdminId: 1, status: 1 });
 campaignRequestSchema.index({ status: 1, createdAt: -1 });
@@ -389,7 +391,7 @@ campaignRequestSchema.index({ status: 1, priority: 1 });
 campaignRequestSchema.index({ workflowId: 1 });
 campaignRequestSchema.index({ publishedCampaignId: 1 });
 campaignRequestSchema.index({ originalRequestId: 1 });
-campaignRequestSchema.index({ expiresAt: 1 });
+campaignRequestSchema.index({ expiresAt: 1 }); // TTL index - moved from field definition
 
 // Virtual for estimated budget per day
 campaignRequestSchema.virtual('estimatedDailyBudget').get(function() {
