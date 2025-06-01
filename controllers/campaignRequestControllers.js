@@ -719,7 +719,7 @@ const publishCampaign = async (req, res) => {
             });
         }
         
-        // Create campaign
+        // Create campaign with all required fields from the campaign request
         const campaign = new Campaign({
             name: campaignRequest.name,
             description: campaignRequest.description,
@@ -728,16 +728,67 @@ const publishCampaign = async (req, res) => {
             facebookCampaignUrl: facebookCampaignUrl || null,
             campaignDetails: campaignDetails || {},
             status: 'active',
+            // ADD THE MISSING REQUIRED FIELDS:
+            objective: campaignRequest.objective, // This was missing!
+            platform: campaignRequest.platform || 'facebook',
             workflowId: campaignRequest.workflowId,
             createdBy: superAdminId,
             originalRequestId: campaignRequest._id,
+            // Budget information
             budget: {
-                daily: campaignRequest.budgetSchedule.dailyBudget,
-                total: campaignRequest.budgetSchedule.totalBudget,
-                currency: 'INR'
+                budgetType: campaignRequest.budgetSchedule?.budgetType || 'daily',
+                daily: campaignRequest.budgetSchedule?.dailyBudget,
+                total: campaignRequest.budgetSchedule?.totalBudget,
+                spent: 0,
+                remaining: campaignRequest.budgetSchedule?.totalBudget,
+                currency: campaignRequest.budgetSchedule?.currency || 'INR',
+                bidStrategy: campaignRequest.budgetSchedule?.bidStrategy || 'lowest_cost',
+                bidAmount: campaignRequest.budgetSchedule?.bidAmount
             },
-            startDate: campaignRequest.budgetSchedule.startDate,
-            endDate: campaignRequest.budgetSchedule.endDate,
+            // Campaign schedule
+            startDate: campaignRequest.budgetSchedule?.startDate || new Date(),
+            endDate: campaignRequest.budgetSchedule?.endDate,
+            timezone: campaignRequest.budgetSchedule?.timezone || 'Asia/Kolkata',
+            // Targeting summary for quick reference
+            targetingSummary: {
+                ageRange: {
+                    min: campaignRequest.targeting?.ageRange?.min || 18,
+                    max: campaignRequest.targeting?.ageRange?.max || 65
+                },
+                gender: campaignRequest.targeting?.gender || 'all',
+                locationCount: campaignRequest.targeting?.locations?.length || 0,
+                interestCount: campaignRequest.targeting?.interests?.length || 0
+            },
+            // Creative summary
+            creativeSummary: {
+                totalCreatives: campaignRequest.creatives?.length || 0,
+                imageCount: campaignRequest.creatives?.reduce((count, creative) => 
+                    count + (creative.imageUrls?.length || 0), 0) || 0,
+                videoCount: campaignRequest.creatives?.reduce((count, creative) => 
+                    count + (creative.videoUrls?.length || 0), 0) || 0,
+                adType: campaignRequest.adType
+            },
+            // Additional fields that might be useful
+            optimizationGoal: campaignRequest.optimizationGoal || 'link_clicks',
+            deliveryType: campaignRequest.deliveryType || 'standard',
+            attribution: campaignRequest.attribution || '7_day_click',
+            utmParameters: campaignRequest.utmParameters || {},
+            // Set initial performance metrics
+            metrics: {
+                impressions: 0,
+                clicks: 0,
+                leads: 0,
+                conversions: 0,
+                spend: 0,
+                reach: 0,
+                frequency: 0,
+                cpm: 0,
+                cpc: 0,
+                ctr: 0,
+                costPerLead: 0,
+                conversionRate: 0,
+                lastSyncedAt: null
+            },
             activatedAt: new Date()
         });
         
@@ -765,9 +816,9 @@ const publishCampaign = async (req, res) => {
             title: 'Campaign Published',
             description: `Your campaign "${campaignRequest.name}" has been published and is now active`,
             type: 'campaign_published',
-            adminId: campaignRequest.adminId,
+            forAdmin: campaignRequest.adminId,
             relatedTo: {
-                model: 'Campaign',
+                model: 'Campaigns',
                 id: campaign._id
             },
             priority: 'high'
@@ -798,7 +849,9 @@ const publishCampaign = async (req, res) => {
                     _id: campaign._id,
                     name: campaign.name,
                     facebookCampaignId: campaign.facebookCampaignId,
-                    status: campaign.status
+                    status: campaign.status,
+                    objective: campaign.objective,
+                    platform: campaign.platform
                 }
             }
         });

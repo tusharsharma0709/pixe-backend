@@ -1148,34 +1148,164 @@ exports.publishProduct = async (req, res) => {
             });
         }
 
-        // Create new product in Products collection
-        const product = new Product({
+        // DEBUG: Log the product request data
+        console.log('Product Request Inventory:', productRequest.inventory);
+        console.log('Product Request Shipping:', productRequest.shipping);
+
+        // Prepare product data with proper field mapping
+        const productData = {
             name: productRequest.name,
             description: productRequest.description,
+            shortDescription: productRequest.shortDescription,
             price: productRequest.price,
             salePrice: productRequest.salePrice,
+            costPrice: productRequest.costPrice,
             currency: productRequest.currency,
             category: productRequest.category,
             subCategory: productRequest.subCategory,
             brand: productRequest.brand,
+            manufacturer: productRequest.manufacturer,
+            model: productRequest.model,
             images: productRequest.images,
             attributes: productRequest.attributes,
-            inventory: productRequest.inventory,
-            shipping: productRequest.shipping,
-            isDigital: productRequest.isDigital,
-            hasVariants: productRequest.hasVariants,
-            status: 'active',
+            
+            // FIXED: Properly map inventory fields
+            inventory: {
+                quantity: productRequest.inventory?.quantity || 0,
+                sku: productRequest.inventory?.sku || null,
+                barcode: productRequest.inventory?.barcode || null,
+                managementType: productRequest.inventory?.managementType || 'manual',
+                lowStockThreshold: productRequest.inventory?.lowStockThreshold || 5,
+                allowBackorders: productRequest.inventory?.allowBackorders || false,
+                trackQuantity: productRequest.inventory?.trackQuantity !== false // Default to true
+            },
+            
+            // FIXED: Properly map shipping fields
+            shipping: {
+                weight: productRequest.shipping?.weight || null,
+                weightUnit: productRequest.shipping?.weightUnit || 'kg',
+                dimensions: {
+                    length: productRequest.shipping?.dimensions?.length || null,
+                    width: productRequest.shipping?.dimensions?.width || null,
+                    height: productRequest.shipping?.dimensions?.height || null,
+                    unit: productRequest.shipping?.dimensions?.unit || 'cm'
+                },
+                shippingClass: productRequest.shipping?.shippingClass || 'standard',
+                requiresSpecialHandling: productRequest.shipping?.requiresSpecialHandling || false,
+                handlingInstructions: productRequest.shipping?.handlingInstructions || null
+            },
+            
+            // Product characteristics
+            productType: productRequest.productType || 'physical',
+            isDigital: productRequest.isDigital || false,
+            hasVariants: productRequest.hasVariants || false,
+            isFragile: productRequest.isFragile || false,
+            isPerishable: productRequest.isPerishable || false,
+            ageRestricted: productRequest.ageRestricted || false,
+            minimumAge: productRequest.minimumAge || null,
+            
+            // Status and references
+            status: 'active', // Published products are active
             catalogId: productRequest.catalogId,
             adminId: productRequest.adminId,
             superAdminId: superAdminId,
             productRequestId: productRequest._id,
-            taxable: productRequest.taxable,
-            taxClass: productRequest.taxClass,
-            taxRate: productRequest.taxRate
+            
+            // Tax information
+            taxable: productRequest.taxable !== false, // Default to true
+            taxClass: productRequest.taxClass || 'standard',
+            taxRate: productRequest.taxRate || null,
+            hsnCode: productRequest.hsnCode || null,
+            
+            // SEO information
+            seo: {
+                metaTitle: productRequest.seo?.metaTitle || null,
+                metaDescription: productRequest.seo?.metaDescription || null,
+                keywords: productRequest.seo?.keywords || [],
+                slug: productRequest.seo?.slug || null
+            },
+            
+            // Availability
+            availability: productRequest.availability || 'in_stock',
+            availableFrom: productRequest.availableFrom || null,
+            availableUntil: productRequest.availableUntil || null,
+            
+            // Compliance
+            compliance: {
+                requiresLicense: productRequest.compliance?.requiresLicense || false,
+                certifications: productRequest.compliance?.certifications || [],
+                safetyWarnings: productRequest.compliance?.safetyWarnings || [],
+                restrictedCountries: productRequest.compliance?.restrictedCountries || [],
+                ageVerificationRequired: productRequest.compliance?.ageVerificationRequired || false
+            },
+            
+            // Quality and condition
+            condition: productRequest.condition || 'new',
+            warranty: {
+                hasWarranty: productRequest.warranty?.hasWarranty || false,
+                warrantyPeriod: productRequest.warranty?.warrantyPeriod || null,
+                warrantyType: productRequest.warranty?.warrantyType || 'none',
+                warrantyDescription: productRequest.warranty?.warrantyDescription || null
+            },
+            
+            // Internal tracking
+            internalSku: productRequest.internalSku || null,
+            supplierInfo: {
+                supplierName: productRequest.supplierInfo?.supplierName || null,
+                supplierSku: productRequest.supplierInfo?.supplierSku || null,
+                supplierPrice: productRequest.supplierInfo?.supplierPrice || null,
+                leadTime: productRequest.supplierInfo?.leadTime || null,
+                minimumOrderQuantity: productRequest.supplierInfo?.minimumOrderQuantity || null
+            },
+            
+            // Tags and features
+            tags: productRequest.tags || [],
+            features: {
+                isFeatured: productRequest.features?.isFeatured || false,
+                isNewArrival: productRequest.features?.isNewArrival || false,
+                isBestseller: productRequest.features?.isBestseller || false,
+                isOnSale: productRequest.features?.isOnSale || false,
+                isLimitedStock: productRequest.features?.isLimitedStock || false
+            },
+            
+            // Facebook integration
+            facebookRetailerId: productRequest.facebookRetailerId || null,
+            
+            // Timestamps
+            publishedAt: new Date(),
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
+
+        // DEBUG: Log the prepared product data
+        console.log('Prepared Product Data:', {
+            name: productData.name,
+            inventory: productData.inventory,
+            shipping: productData.shipping,
+            catalogId: productData.catalogId
         });
+
+        // Create new product in Products collection
+        const product = new Product(productData);
+        
+        // Validate before saving
+        const validationError = product.validateSync();
+        if (validationError) {
+            console.error('Product validation error:', validationError.errors);
+            return res.status(400).json({
+                success: false,
+                message: "Product validation failed",
+                errors: Object.keys(validationError.errors).map(key => ({
+                    field: key,
+                    message: validationError.errors[key].message,
+                    value: validationError.errors[key].value
+                }))
+            });
+        }
 
         // Save the new product
         await product.save();
+        console.log('Product saved successfully:', product._id);
 
         // Update the product request status and reference to published product
         productRequest.status = 'published';
@@ -1186,21 +1316,46 @@ exports.publishProduct = async (req, res) => {
         // Update product count in catalog
         await ProductCatalog.findByIdAndUpdate(
             productRequest.catalogId,
-            { $inc: { productCount: 1 } }
+            { 
+                $inc: { 
+                    productCount: 1,
+                    approvedProductCount: 1 
+                } 
+            }
+        );
+
+        // Update file uploads to link to the published product
+        await FileUpload.updateMany(
+            { entityType: 'product', entityId: productRequest._id },
+            { $set: { entityId: product._id } }
         );
 
         res.status(200).json({
             success: true,
             message: "Product published successfully",
-            product,
-            productRequest
+            data: {
+                product: {
+                    _id: product._id,
+                    name: product.name,
+                    status: product.status,
+                    catalogId: product.catalogId,
+                    inventory: product.inventory,
+                    publishedAt: product.publishedAt
+                },
+                productRequest: {
+                    _id: productRequest._id,
+                    status: productRequest.status,
+                    publishedProductId: productRequest.publishedProductId
+                }
+            }
         });
     } catch (error) {
         console.error("Publish product error:", error);
         res.status(500).json({
             success: false,
             message: "Error publishing product",
-            error: error.message
+            error: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 };
