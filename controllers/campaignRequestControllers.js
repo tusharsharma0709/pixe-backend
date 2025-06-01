@@ -758,6 +758,7 @@ const publishCampaign = async (req, res) => {
         
         // Get admin details for notification
         const admin = await Admin.findById(campaignRequest.adminId);
+        const superadmin = await SuperAdmin.findById(superAdminId);
         
         // Create notification for admin
         await Notification.create({
@@ -776,6 +777,7 @@ const publishCampaign = async (req, res) => {
         await ActivityLog.create({
             actorId: superAdminId,
             actorModel: 'SuperAdmins',
+            actorName: `${superadmin.first_name} ${superadmin.last_name}`,
             action: 'campaign_published',
             entityType: 'Campaign',
             entityId: campaign._id,
