@@ -418,21 +418,21 @@ registerOrLogin: async (req, res) => {
                 page = 1,
                 limit = 10
             } = req.query;
-
+    
             // First get all lead assignments for this agent
             const leadAssignments = await LeadAssignment.find({
                 agentId,
                 status: 'active'
             }).select('userId');
-
+    
             const userIds = leadAssignments.map(assignment => assignment.userId);
-
+    
             // Build query for users
             const query = { _id: { $in: userIds } };
-
+    
             if (status) query.status = status;
             if (campaignId) query.campaignId = campaignId;
-
+    
             if (search) {
                 query.$or = [
                     { name: { $regex: search, $options: 'i' } },
@@ -440,7 +440,7 @@ registerOrLogin: async (req, res) => {
                     { email_id: { $regex: search, $options: 'i' } }
                 ];
             }
-
+    
             // Build sort options
             const sortOptions = {};
             if (sortBy) {
@@ -448,13 +448,13 @@ registerOrLogin: async (req, res) => {
             } else {
                 sortOptions.lastActivityAt = -1; // Default to most recently active
             }
-
+    
             // Calculate pagination
             const skip = (parseInt(page) - 1) * parseInt(limit);
-
+    
             // Get total count
             const totalCount = await User.countDocuments(query);
-
+    
             // Execute query with pagination
             const users = await User.find(query)
                 .populate('campaignId', 'name')
@@ -463,29 +463,39 @@ registerOrLogin: async (req, res) => {
                 .sort(sortOptions)
                 .skip(skip)
                 .limit(parseInt(limit));
-
-            // Get additional stats for each user
+    
+            // Get additional stats for each user including session details
             const usersWithStats = await Promise.all(
                 users.map(async (user) => {
+                    // Get the most recent active session
                     const activeSession = await UserSession.findOne({
                         userId: user._id,
                         status: 'active'
                     }).sort({ createdAt: -1 });
-
+    
+                    // If no active session, get the most recent completed session
+                    const recentSession = activeSession || await UserSession.findOne({
+                        userId: user._id
+                    }).sort({ createdAt: -1 });
+    
                     const unreadMessages = await Message.countDocuments({
                         userId: user._id,
                         sender: 'user',
                         status: { $ne: 'read' }
                     });
-
+    
                     return {
                         ...user.toObject(),
                         currentSession: activeSession,
+                        recentSession: recentSession, // Most recent session (active or completed)
+                        sessionId: activeSession?._id || recentSession?._id || null, // Session ID for easy access
+                        sessionStatus: activeSession?.status || recentSession?.status || null,
+                        sessionStartedAt: activeSession?.createdAt || recentSession?.createdAt || null,
                         unreadMessages
                     };
                 })
             );
-
+    
             return res.status(200).json({
                 success: true,
                 data: usersWithStats,
