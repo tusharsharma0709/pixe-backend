@@ -8,6 +8,7 @@ const { ActivityLog } = require('../models/ActivityLogs');
 const { Message } = require('../models/Messages');
 const { Notification } = require('../models/Notifications');
 const mongoose = require('mongoose');
+const { UserSession } = require('../models/UserSessions');
 const ObjectId = mongoose.Types.ObjectId;
 
 // Helper function to log activity
@@ -218,13 +219,13 @@ const LeadAssignmentController = {
         try {
             const agentId = req.agentId; // Get from auth middleware
             const { status, priority, sortBy, sortOrder, page = 1, limit = 10 } = req.query;
-
+    
             // Build query
             const query = { agentId };
-
+    
             if (status) query.status = status;
             if (priority) query.priority = priority;
-
+    
             // Build sort options
             const sortOptions = {};
             if (sortBy) {
@@ -232,13 +233,13 @@ const LeadAssignmentController = {
             } else {
                 sortOptions.createdAt = -1; // Default to newest first
             }
-
+    
             // Calculate pagination
             const skip = (parseInt(page) - 1) * parseInt(limit);
-
+    
             // Get total count
             const totalCount = await LeadAssignment.countDocuments(query);
-
+    
             // Execute query with pagination
             const leadAssignments = await LeadAssignment.find(query)
                 .sort(sortOptions)
@@ -246,10 +247,76 @@ const LeadAssignmentController = {
                 .limit(parseInt(limit))
                 .populate('userId', 'name phone email_id status')
                 .populate('campaignId', 'name status');
-
+    
+            // Enhanced with session details for each assignment
+            const assignmentsWithSessionDetails = await Promise.all(
+                leadAssignments.map(async (assignment) => {
+                    if (!assignment.userId) {
+                        return assignment.toObject();
+                    }
+    
+                    // Get the most recent active session for this user
+                    const activeSession = await UserSession.findOne({
+                        userId: assignment.userId._id,
+                        status: 'active'
+                    }).sort({ createdAt: -1 });
+    
+                    // If no active session, get the most recent session of any status
+                    const recentSession = activeSession || await UserSession.findOne({
+                        userId: assignment.userId._id
+                    }).sort({ createdAt: -1 });
+    
+                    // Get unread messages count for this user
+                    const unreadMessages = await Message.countDocuments({
+                        userId: assignment.userId._id,
+                        sender: 'user',
+                        status: { $ne: 'read' }
+                    });
+    
+                    // Get total sessions count for this user
+                    const totalSessions = await UserSession.countDocuments({
+                        userId: assignment.userId._id
+                    });
+    
+                    // Get completed sessions count
+                    const completedSessions = await UserSession.countDocuments({
+                        userId: assignment.userId._id,
+                        status: 'completed'
+                    });
+    
+                    return {
+                        ...assignment.toObject(),
+                        sessionDetails: {
+                            // Current active session
+                            currentSession: activeSession,
+                            
+                            // Most recent session (active or completed)
+                            recentSession: recentSession,
+                            
+                            // Direct access fields
+                            sessionId: activeSession?._id || recentSession?._id || null,
+                            sessionStatus: activeSession?.status || recentSession?.status || null,
+                            sessionStartedAt: activeSession?.createdAt || recentSession?.createdAt || null,
+                            sessionEndedAt: recentSession?.endedAt || null,
+                            
+                            // Session statistics
+                            totalSessions: totalSessions,
+                            completedSessions: completedSessions,
+                            hasActiveSession: !!activeSession,
+                            
+                            // Communication stats
+                            unreadMessages: unreadMessages,
+                            
+                            // Last activity timestamp
+                            lastActivityAt: recentSession?.updatedAt || assignment.userId.lastActivityAt || null
+                        }
+                    };
+                })
+            );
+    
             return res.status(200).json({
                 success: true,
-                data: leadAssignments,
+                data: assignmentsWithSessionDetails,
                 pagination: {
                     totalRecords: totalCount,
                     currentPage: parseInt(page),
